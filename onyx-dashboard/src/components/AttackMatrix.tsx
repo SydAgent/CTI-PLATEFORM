@@ -167,6 +167,29 @@ interface TechniqueData {
   severity_breakdown: Record<string, number>;
 }
 
+const PEDAGOGY_DATA: Record<string, { explanation: string; impact: string }> = {
+  'T1486': {
+    explanation: 'L\'attaquant chiffre les précieuses données de l\'entreprise pour exiger une rançon (Ransomware).',
+    impact: 'Arrêt total des opérations métiers, pertes financières massives et perte de confiance des clients.',
+  },
+  'T1190': {
+    explanation: 'L\'attaquant exploite une faille dans un serveur exposé sur internet (ex: web, VPN) pour s\'introduire.',
+    impact: 'Point d\'entrée direct dans le réseau interne, compromettant des serveurs critiques.',
+  },
+  'T1566': {
+    explanation: 'Envoi d\'emails de phishing contenant des liens ou pièces jointes malveillantes.',
+    impact: 'Compromission des postes de travail des employés, vol d\'identifiants et première étape d\'une cyberattaque.',
+  },
+  'T1059': {
+    explanation: 'Utilisation de scripts légitimes (comme PowerShell) pour exécuter des commandes malveillantes de façon discrète.',
+    impact: 'Permet à l\'attaquant de prendre le contrôle d\'une machine en mode "invisible" (Living-Off-The-Land).',
+  },
+  'T1110': {
+    explanation: 'Tentatives répétées de deviner des mots de passe (Brute-Force).',
+    impact: 'Risque élevé d\'accès non autorisé aux comptes des collaborateurs.',
+  }
+};
+
 function heatColor(count: number, maxCount: number): string {
   if (count === 0) return 'transparent';
   const intensity = Math.min(count / Math.max(maxCount, 1), 1);
@@ -313,14 +336,18 @@ export default function AttackMatrix() {
               </div>
             </div>
           </div>
-          {/* Severity breakdown */}
-          {heatmapData[selectedTechnique].severity_breakdown && (
-            <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
-              {Object.entries(heatmapData[selectedTechnique].severity_breakdown).map(([sev, count]) => (
-                <span key={sev} className={`severity-badge severity-${sev}`}>{sev}: {count}</span>
-              ))}
-            </div>
-          )}
+          {/* Pedagogy / Business Impact */}
+          <div style={{ marginTop: '16px', padding: '12px', background: 'rgba(0,0,0,0.4)', borderRadius: '6px', borderLeft: '3px solid #ff0040' }}>
+            <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ff0040', marginBottom: '8px' }}>Impact Métier & Explication</div>
+            <p style={{ fontSize: '13px', color: '#e5e7eb', marginBottom: '8px', lineHeight: '1.4' }}>
+              <strong style={{ color: '#00eeff' }}>Que se passe-t-il ?</strong><br />
+              {PEDAGOGY_DATA[selectedTechnique]?.explanation || 'L\'attaquant utilise cette technique pour s\'implanter ou progresser dans l\'infrastructure.'}
+            </p>
+            <p style={{ fontSize: '13px', color: '#e5e7eb', lineHeight: '1.4' }}>
+              <strong style={{ color: '#00eeff' }}>Impact :</strong><br />
+              {PEDAGOGY_DATA[selectedTechnique]?.impact || 'Vulnérabilisation des systèmes.'}
+            </p>
+          </div>
         </div>
       )}
     </div>

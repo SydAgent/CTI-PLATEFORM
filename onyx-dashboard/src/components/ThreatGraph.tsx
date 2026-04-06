@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import * as d3 from 'd3-force';
 
 /*
  * ONYX CTI — 3D STIX Threat Graph
@@ -108,7 +109,7 @@ function stixToGraphData(objects: any[]): GraphData {
 }
 
 export default function ThreatGraph() {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<any>(null);
   const [graphData, setGraphData] = useState<GraphData>({ nodes: [], links: [] });
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -139,9 +140,46 @@ export default function ThreatGraph() {
     loadGraph();
   }, []);
 
+  // Apply custom d3 physics to avoid overlapping nodes
+  useEffect(() => {
+    if (containerRef.current && ForceGraph) {
+      // Strong repulsion to prevent overlapping
+      containerRef.current.d3Force('charge').strength(-400).distanceMax(400);
+      containerRef.current.d3Force('collide', d3.forceCollide((node: any) => node.val * 1.5 + 5));
+    }
+  }, [graphData, ForceGraph]);
+
   const handleNodeClick = useCallback((node: GraphNode) => {
     setSelectedNode(node);
   }, []);
+
+  // SciBERT Narrative Generator
+  const generateNarrative = (node: GraphNode) => {
+    const incoming = graphData.links.filter(l => (typeof l.target === 'string' ? l.target : (l.target as any).id) === node.id);
+    const outgoing = graphData.links.filter(l => (typeof l.source === 'string' ? l.source : (l.source as any).id) === node.id);
+    
+    let story = `[SciBERT NLP Analysis] L'entité ${node.name} (${node.type}) joue un rôle clé dans cette campagne.`;
+    
+    if (node.type === 'threat-actor') {
+      const malwares = outgoing.filter(l => l.relationship_type === 'uses').map(l => {
+        const targetNode = graphData.nodes.find(n => n.id === ((typeof l.target === 'string') ? l.target : (l.target as any).id));
+        return targetNode?.name || 'des outils inconnus';
+      });
+      const targets = outgoing.filter(l => l.relationship_type === 'targets').map(l => {
+        const targetNode = graphData.nodes.find(n => n.id === ((typeof l.target === 'string') ? l.target : (l.target as any).id));
+        return targetNode?.name || 'des cibles inconnues';
+      });
+      story = `[SciBERT] Le groupe d'attaquants "${node.name}" déploie la menace en utilisant ${malwares.length > 0 ? malwares.join(', ') : 'ses arsenaux'} pour cibler activement ${targets.length > 0 ? targets.join(', ') : 'divers secteurs'}.`;
+    } else if (node.type === 'malware' || node.type === 'tool') {
+      const users = incoming.filter(l => l.relationship_type === 'uses').map(l => {
+        const sourceNode = graphData.nodes.find(n => n.id === ((typeof l.source === 'string') ? l.source : (l.source as any).id));
+        return sourceNode?.name || 'des acteurs inconnus';
+      });
+      story = `[SciBERT] Le logiciel malveillant "${node.name}" est l'arme de prédilection utilisée par ${users.length > 0 ? users.join(', ') : 'des groupes cybercriminels'} afin de compromettre les infrastructures.`;
+    }
+    
+    return story;
+  };
 
   if (loading || !ForceGraph) {
     return (
@@ -236,6 +274,14 @@ export default function ThreatGraph() {
                   {graphData.links.filter(l => (typeof l.source === 'string' ? l.source : (l.source as any).id) === selectedNode.id).length}
                 </div>
               </div>
+            </div>
+
+            {/* SciBERT NLP Narrative */}
+            <div style={{ background: 'rgba(0,238,255,0.05)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-md)', borderLeft: '3px solid var(--onyx-cyan)' }}>
+              <div style={{ fontSize: 'var(--font-size-xs)', color: 'var(--onyx-cyan)', marginBottom: '6px', fontWeight: 'bold' }}>⟁ SCI-BERT NARRATIVE ENGINE</div>
+              <p style={{ fontSize: '12px', color: '#e5e7eb', lineHeight: '1.5', fontFamily: 'sans-serif' }}>
+                {generateNarrative(selectedNode)}
+              </p>
             </div>
 
             {/* Raw STIX data */}
