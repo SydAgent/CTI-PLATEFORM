@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "onyx-connectors"
+version = "3.0.0"
+description = "ONYX CTI Platform — External Feed & SIEM/SOAR Connectors"
+requires-python = ">=3.12"
+dependencies = [
+    "onyx-core>=3.0.0",
+    "httpx>=0.27,<1.0",
+    "pymisp>=2.4.189,<3.0",
+]

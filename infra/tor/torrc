@@ -1,0 +1,42 @@
+# ============================================================================
+# ONYX CTI — Tor Configuration
+# Hardened for CTI crawling: restricted exit policy, circuit isolation.
+# ============================================================================
+
+# SOCKS proxy for applications
+SocksPort 0.0.0.0:9050
+
+# Control port for circuit management (NewNym signal for IP rotation)
+ControlPort 0.0.0.0:9051
+
+# Hashed password set at runtime via entrypoint
+# HashedControlPassword is injected by entrypoint.sh
+
+# Isolate circuits per destination for better anonymity
+IsolateDestAddr 1
+IsolateDestPort 1
+
+# Data directory
+DataDirectory /var/lib/tor
+
+# Logging
+Log notice file /var/log/tor/notices.log
+
+# DNS resolution through Tor
+DNSPort 5353
+
+# Circuit tuning
+CircuitBuildTimeout 30
+LearnCircuitBuildTimeout 1
+MaxCircuitDirtiness 600
+NewCircuitPeriod 30
+
+# Safety: no exit relay functionality
+ExitPolicy reject *:*
+
+# Performance
+NumEntryGuards 4
+KeepalivePeriod 60
+
+# Disable Tor browser-specific features
+AvoidDiskWrites 1

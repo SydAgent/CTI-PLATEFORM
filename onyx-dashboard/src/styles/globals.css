@@ -1,0 +1,515 @@
+/* ============================================================================
+   ONYX CTI PLATFORM — Design System
+   Military-grade dark theme with neon accents, glassmorphism, and micro-animations.
+   Surpasses OpenCTI's flat design with depth, glow, and real-time visual cues.
+   ============================================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* --------------------------------------------------------------------------
+   CSS Custom Properties — Design Tokens
+   -------------------------------------------------------------------------- */
+:root {
+  /* Core palette — deep space + neon */
+  --onyx-bg-primary: #06080f;
+  --onyx-bg-secondary: #0c1019;
+  --onyx-bg-tertiary: #121828;
+  --onyx-bg-elevated: #1a2236;
+  --onyx-bg-card: rgba(18, 24, 40, 0.7);
+  --onyx-bg-glass: rgba(12, 16, 25, 0.65);
+
+  /* Accent colors */
+  --onyx-cyan: #00f0ff;
+  --onyx-cyan-dim: rgba(0, 240, 255, 0.15);
+  --onyx-cyan-glow: 0 0 20px rgba(0, 240, 255, 0.3);
+  --onyx-magenta: #ff00e5;
+  --onyx-magenta-dim: rgba(255, 0, 229, 0.15);
+  --onyx-green: #00ff88;
+  --onyx-green-dim: rgba(0, 255, 136, 0.15);
+  --onyx-amber: #ffaa00;
+  --onyx-amber-dim: rgba(255, 170, 0, 0.15);
+  --onyx-red: #ff3b5c;
+  --onyx-red-dim: rgba(255, 59, 92, 0.15);
+
+  /* Severity colors */
+  --severity-critical: #ff3b5c;
+  --severity-high: #ff6b35;
+  --severity-medium: #ffaa00;
+  --severity-low: #00ff88;
+  --severity-info: #00f0ff;
+
+  /* Text */
+  --text-primary: #e8ecf4;
+  --text-secondary: #8b95a8;
+  --text-tertiary: #5a6478;
+  --text-accent: var(--onyx-cyan);
+
+  /* Borders */
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-accent: rgba(0, 240, 255, 0.2);
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Border radius */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-full: 9999px;
+
+  /* Typography */
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --font-size-xs: 0.7rem;
+  --font-size-sm: 0.8rem;
+  --font-size-base: 0.9rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.15rem;
+  --font-size-xl: 1.4rem;
+  --font-size-2xl: 1.8rem;
+  --font-size-3xl: 2.4rem;
+
+  /* Sidebar */
+  --sidebar-width: 260px;
+  --sidebar-collapsed: 72px;
+  --header-height: 56px;
+
+  /* Transitions */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-default: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* --------------------------------------------------------------------------
+   Reset & Base
+   -------------------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 16px; scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
+
+body {
+  font-family: var(--font-body);
+  background: var(--onyx-bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+/* Animated grid background */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 20% 50%, rgba(0, 240, 255, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(255, 0, 229, 0.02) 0%, transparent 50%),
+    radial-gradient(circle at 50% 80%, rgba(0, 255, 136, 0.02) 0%, transparent 50%);
+}
+
+/* Subtle grid overlay */
+body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
+  background-size: 60px 60px;
+  pointer-events: none;
+}
+
+a { color: var(--onyx-cyan); text-decoration: none; transition: color var(--transition-fast); }
+a:hover { color: #66f7ff; }
+
+/* --------------------------------------------------------------------------
+   Scrollbar
+   -------------------------------------------------------------------------- */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--onyx-bg-secondary); }
+::-webkit-scrollbar-thumb {
+  background: var(--onyx-bg-elevated);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
+
+/* --------------------------------------------------------------------------
+   Layout Components
+   -------------------------------------------------------------------------- */
+.onyx-layout {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: var(--header-height) 1fr;
+  min-height: 100vh;
+  transition: grid-template-columns var(--transition-default);
+}
+
+.onyx-sidebar {
+  grid-row: 1 / -1;
+  background: var(--onyx-bg-secondary);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-md) 0;
+  overflow-y: auto;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.onyx-header {
+  background: var(--onyx-bg-glass);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-lg);
+  gap: var(--space-md);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.onyx-main {
+  padding: var(--space-lg);
+  overflow-y: auto;
+  min-height: calc(100vh - var(--header-height));
+}
+
+/* --------------------------------------------------------------------------
+   Card — Glassmorphic panels
+   -------------------------------------------------------------------------- */
+.onyx-card {
+  background: var(--onyx-bg-card);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  transition: all var(--transition-default);
+  position: relative;
+  overflow: hidden;
+}
+
+.onyx-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(0, 240, 255, 0.1), transparent 50%, rgba(255, 0, 229, 0.05));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+}
+
+.onyx-card:hover {
+  border-color: var(--border-accent);
+  box-shadow: var(--onyx-cyan-glow);
+  transform: translateY(-1px);
+}
+
+/* --------------------------------------------------------------------------
+   Widget Grid — Dashboard layout
+   -------------------------------------------------------------------------- */
+.widget-grid {
+  display: grid;
+  gap: var(--space-lg);
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.widget-grid .span-2 { grid-column: span 2; }
+.widget-grid .span-3 { grid-column: span 3; }
+.widget-grid .span-4 { grid-column: span 4; }
+.widget-grid .row-2 { grid-row: span 2; }
+
+@media (max-width: 1400px) {
+  .widget-grid { grid-template-columns: repeat(2, 1fr); }
+  .widget-grid .span-3 { grid-column: span 2; }
+}
+
+/* --------------------------------------------------------------------------
+   Stat Widget — KPI display
+   -------------------------------------------------------------------------- */
+.stat-widget {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.stat-widget .stat-label {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  font-weight: 600;
+}
+
+.stat-widget .stat-value {
+  font-size: var(--font-size-3xl);
+  font-weight: 800;
+  font-family: var(--font-mono);
+  background: linear-gradient(135deg, var(--onyx-cyan), var(--onyx-magenta));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  line-height: 1.1;
+}
+
+.stat-widget .stat-trend {
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.stat-trend.up { color: var(--onyx-green); }
+.stat-trend.down { color: var(--onyx-red); }
+
+/* --------------------------------------------------------------------------
+   Severity Badge
+   -------------------------------------------------------------------------- */
+.severity-badge {
+  font-size: var(--font-size-xs);
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  font-family: var(--font-mono);
+}
+
+.severity-critical { background: var(--severity-critical); color: #fff; }
+.severity-high { background: var(--severity-high); color: #fff; }
+.severity-medium { background: var(--severity-medium); color: #000; }
+.severity-low { background: var(--severity-low); color: #000; }
+.severity-info { background: var(--severity-info); color: #000; }
+
+/* --------------------------------------------------------------------------
+   Pulse Animation — Live data indicator
+   -------------------------------------------------------------------------- */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 4px var(--onyx-cyan), 0 0 8px rgba(0, 240, 255, 0.2); }
+  50% { box-shadow: 0 0 8px var(--onyx-cyan), 0 0 20px rgba(0, 240, 255, 0.4); }
+}
+
+.pulse-live {
+  width: 8px;
+  height: 8px;
+  background: var(--onyx-green);
+  border-radius: 50%;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+/* --------------------------------------------------------------------------
+   IOC Value — Monospace styled
+   -------------------------------------------------------------------------- */
+.ioc-value {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  background: rgba(0, 240, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  color: var(--onyx-cyan);
+  word-break: break-all;
+}
+
+/* --------------------------------------------------------------------------
+   Data Table
+   -------------------------------------------------------------------------- */
+.onyx-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--font-size-sm);
+}
+
+.onyx-table thead th {
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+  color: var(--text-tertiary);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-default);
+  position: sticky;
+  top: 0;
+  background: var(--onyx-bg-secondary);
+  z-index: 10;
+}
+
+.onyx-table tbody tr {
+  transition: background var(--transition-fast);
+}
+
+.onyx-table tbody tr:hover {
+  background: var(--onyx-bg-elevated);
+}
+
+.onyx-table tbody td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+/* --------------------------------------------------------------------------
+   Search / Command Palette
+   -------------------------------------------------------------------------- */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: var(--onyx-bg-tertiary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  flex: 1;
+  max-width: 500px;
+  transition: all var(--transition-fast);
+}
+
+.search-bar:focus-within {
+  border-color: var(--onyx-cyan);
+  box-shadow: 0 0 0 3px rgba(0, 240, 255, 0.1);
+}
+
+.search-bar input {
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  width: 100%;
+}
+
+.search-bar input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.search-bar .shortcut {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+  background: var(--onyx-bg-primary);
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default);
+  white-space: nowrap;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation Items
+   -------------------------------------------------------------------------- */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-lg);
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: all var(--transition-fast);
+  border-left: 3px solid transparent;
+  cursor: pointer;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--onyx-bg-tertiary);
+}
+
+.nav-item.active {
+  color: var(--onyx-cyan);
+  background: var(--onyx-cyan-dim);
+  border-left-color: var(--onyx-cyan);
+}
+
+.nav-item .nav-icon { font-size: 1.1rem; width: 20px; text-align: center; }
+.nav-item .nav-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--onyx-red);
+  color: #fff;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  font-weight: 700;
+}
+
+/* --------------------------------------------------------------------------
+   Logo
+   -------------------------------------------------------------------------- */
+.onyx-logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-lg);
+}
+
+.onyx-logo .logo-mark {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--onyx-cyan), var(--onyx-magenta));
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-weight: 900;
+  font-size: 14px;
+  color: #000;
+}
+
+.onyx-logo .logo-text {
+  font-weight: 800;
+  font-size: var(--font-size-lg);
+  letter-spacing: 2px;
+  background: linear-gradient(135deg, var(--onyx-cyan), var(--text-primary));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.onyx-logo .logo-version {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+/* --------------------------------------------------------------------------
+   Keyframes
+   -------------------------------------------------------------------------- */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.animate-in { animation: fadeInUp 0.4s ease-out forwards; }
+
+.loading-shimmer {
+  background: linear-gradient(90deg, var(--onyx-bg-tertiary) 25%, var(--onyx-bg-elevated) 50%, var(--onyx-bg-tertiary) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-md);
+}

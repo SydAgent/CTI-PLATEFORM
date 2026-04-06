@@ -1,0 +1,51 @@
+# ============================================================================
+# ONYX CTI — Elasticsearch Node Configuration
+# Optimized for CTI workloads: high cardinality keyword fields, time-series
+# metrics, and full-text search on threat intelligence text.
+# ============================================================================
+
+cluster.name: onyx-cti-cluster
+node.name: onyx-es-node-1
+
+# --- Network ---
+network.host: 0.0.0.0
+http.port: 9200
+
+# --- Paths ---
+path.data: /usr/share/elasticsearch/data
+path.logs: /usr/share/elasticsearch/logs
+
+# --- Discovery ---
+discovery.type: single-node
+
+# --- Memory ---
+bootstrap.memory_lock: true
+
+# --- Security ---
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false
+
+# --- Performance Tuning ---
+# Increase max result window for deep pagination on IOC searches
+index.max_result_window: 50000
+
+# Allow larger boolean queries (complex IOC filters)
+indices.query.bool.max_clause_count: 4096
+
+# Fielddata circuit breaker (prevent OOM on aggregations)
+indices.breaker.fielddata.limit: 40%
+indices.breaker.request.limit: 40%
+indices.breaker.total.limit: 70%
+
+# --- Thread Pools ---
+thread_pool.search.size: 8
+thread_pool.search.queue_size: 1000
+thread_pool.write.size: 4
+thread_pool.write.queue_size: 500
+
+# --- Indexing ---
+action.destructive_requires_name: true
+action.auto_create_index: true
+
+# --- Monitoring ---
+xpack.monitoring.collection.enabled: false

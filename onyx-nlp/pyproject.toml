@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "onyx-nlp"
+version = "3.0.0"
+description = "ONYX CTI Platform — NLP/ML Engine for IOC Extraction & ATT&CK Mapping"
+requires-python = ">=3.12"
+dependencies = [
+    "onyx-core>=3.0.0",
+    "spacy>=3.7,<4.0",
+    "transformers>=4.40,<5.0",
+    "torch>=2.2,<3.0",
+    "scikit-learn>=1.4,<2.0",
+    "iocextract>=1.16,<2.0",
+    "defang>=0.5,<1.0",
+]
