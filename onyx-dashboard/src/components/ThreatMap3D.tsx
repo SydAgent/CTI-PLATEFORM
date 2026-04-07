@@ -1,9 +1,9 @@
 "use client";
 
 import React, { useEffect, useState, useMemo } from 'react';
-import DeckGL from '@deck.gl/react';
-import { GeoJsonLayer, ArcLayer, ScatterplotLayer } from '@deck.gl/layers';
-import { Map } from 'react-map-gl/maplibre';
+
+// Removed static WebGL imports to prevent maxTextureDimension2D SSR crash
+// Dependencies will be lazy-loaded in useEffect
 
 const INITIAL_VIEW_STATE = {
   longitude: 10,
@@ -25,9 +25,35 @@ const MAJOR_CITIES = [
 ];
 
 export default function ThreatMap3D() {
+  const [DeckGL, setDeckGL] = useState<any>(null);
+  const [deckLayers, setDeckLayers] = useState<any>(null);
+  const [MapGL, setMapGL] = useState<any>(null);
+
   const [arcs, setArcs] = useState<any[]>([]);
   const [geoData, setGeoData] = useState(null);
   const [hoverInfo, setHoverInfo] = useState<any>(null);
+  const [isWebGLSupported, setIsWebGLSupported] = useState<boolean | null>(null);
+
+  // WebGL Support Detection
+  useEffect(() => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    setIsWebGLSupported(!!gl);
+  }, []);
+
+  // Lazy-load WebGL components only if supported
+  useEffect(() => {
+    if (isWebGLSupported === false) return;
+    Promise.all([
+      import('@deck.gl/react'),
+      import('@deck.gl/layers'),
+      import('react-map-gl/maplibre')
+    ]).then(([deck, layers, mapgl]) => {
+      setDeckGL(() => deck.default);
+      setDeckLayers(layers);
+      setMapGL(() => mapgl.Map);
+    }).catch(console.error);
+  }, []);
 
   // Load GeoJSON borders
   useEffect(() => {
@@ -72,56 +98,86 @@ export default function ThreatMap3D() {
     return set;
   }, [arcs]);
 
-  const layers = [
-    // 1. Geopolitical Boundaries
-    new GeoJsonLayer({
-      id: 'geojson-borders',
-      data: geoData,
-      pickable: true,
-      stroked: true,
-      filled: true,
-      lineWidthMinPixels: 1,
-      getLineColor: [0, 238, 255, 60],
-      getFillColor: (d: any) => {
-        const countryName = d.properties.admin || d.properties.name;
-        if (activeCountries.has(countryName)) {
-          return [239, 68, 68, 80]; // Pulsing red for active zones
-        }
-        return [0, 0, 0, 0];
-      },
-      updateTriggers: {
-        getFillColor: activeCountries
-      }
-    }),
-    
-    // 2. Nodes (Impact / Source zones)
-    new ScatterplotLayer({
-      id: 'nodes-layer',
-      data: MAJOR_CITIES,
-      getPosition: d => [d.lon, d.lat],
-      getFillColor: [0, 238, 255, 200],
-      getRadius: 100000,
-      radiusScale: 2,
-      radiusMinPixels: 4,
-      radiusMaxPixels: 12,
-      stroked: true,
-      getLineColor: [0, 238, 255],
-      lineWidthMinPixels: 2
-    }),
+  const layersList = useMemo(() => {
+    if (!deckLayers) return [];
+    const { GeoJsonLayer, ScatterplotLayer, ArcLayer } = deckLayers;
 
-    // 3. Attack Vectors
-    new ArcLayer({
-      id: 'attack-arcs',
-      data: arcs,
-      getSourcePosition: d => d.source,
-      getTargetPosition: d => d.target,
-      getSourceColor: d => [...d.color, 255],
-      getTargetColor: d => [0, 238, 255, 255],
-      getWidth: 3,
-      pickable: true,
-      onHover: info => setHoverInfo(info)
-    })
-  ];
+    return [
+      // 1. Geopolitical Boundaries
+      new GeoJsonLayer({
+        id: 'geojson-borders',
+        data: geoData,
+        pickable: true,
+        stroked: true,
+        filled: true,
+        lineWidthMinPixels: 1,
+        getLineColor: [0, 238, 255, 60],
+        getFillColor: (d: any) => {
+          const countryName = d.properties.admin || d.properties.name;
+          if (activeCountries.has(countryName)) {
+            return [239, 68, 68, 80]; // Pulsing red for active zones
+          }
+          return [0, 0, 0, 0];
+        },
+        updateTriggers: {
+          getFillColor: activeCountries
+        }
+      }),
+      
+      // 2. Nodes (Impact / Source zones)
+      new ScatterplotLayer({
+        id: 'nodes-layer',
+        data: MAJOR_CITIES,
+        getPosition: (d: any) => [d.lon, d.lat],
+        getFillColor: [0, 238, 255, 200],
+        getRadius: 100000,
+        radiusScale: 2,
+        radiusMinPixels: 4,
+        radiusMaxPixels: 12,
+        stroked: true,
+        getLineColor: [0, 238, 255],
+        lineWidthMinPixels: 2
+      }),
+
+      // 3. Attack Vectors
+      new ArcLayer({
+        id: 'attack-arcs',
+        data: arcs,
+        getSourcePosition: (d: any) => d.source,
+        getTargetPosition: (d: any) => d.target,
+        getSourceColor: (d: any) => [...d.color, 255],
+        getTargetColor: (d: any) => [0, 238, 255, 255],
+        getWidth: 3,
+        pickable: true,
+        onHover: (info: any) => setHoverInfo(info)
+      })
+    ];
+  }, [arcs, activeCountries, geoData, deckLayers, setHoverInfo]);
+
+  if (isWebGLSupported === false) {
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '400px', background: '#080c14', borderRadius: '12px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', border: '1px solid #ef4444' }}>
+        <div style={{ fontSize: 28, marginBottom: 12 }}>⚠️</div>
+        <div style={{ color: '#ef4444', fontFamily: 'monospace', fontSize: '12px', fontWeight: 'bold' }}>WEBGL HARDWARE ACCELERATION DISABLED</div>
+        <div style={{ color: '#6b7280', fontFamily: 'monospace', fontSize: '10px', marginTop: 4 }}>[ FALLBACK: SECURE 2D MODE ACTIVE ]</div>
+        <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
+          {MAJOR_CITIES.map(c => (
+            <div key={c.name} style={{ background: '#111', padding: '4px 8px', borderRadius: 4, fontSize: 9, color: '#00eeff', border: '1px solid #1f2937' }}>
+              {c.name} · {c.ip}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (!DeckGL || !MapGL || isWebGLSupported === null) {
+    return (
+      <div style={{ position: 'relative', width: '100%', height: '400px', background: '#050a0f', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ color: '#00eeff', fontFamily: 'monospace', fontSize: '11px', opacity: 0.5 }}>Loading Secure GL Engine...</div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '400px', background: '#050a0f', borderRadius: '12px', overflow: 'hidden', border: '1px solid rgba(0, 238, 255, 0.2)', boxShadow: '0 0 50px rgba(0,0,0,0.8) inset' }}>
@@ -131,12 +187,12 @@ export default function ThreatMap3D() {
       </div>
 
       <DeckGL
-        layers={layers}
+        layers={layersList}
         initialViewState={INITIAL_VIEW_STATE}
         controller={true}
         getCursor={() => 'crosshair'}
       >
-        <Map
+        <MapGL
           mapStyle={MAP_STYLE}
           attributionControl={false}
         />

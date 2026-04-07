@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
-  reactStrictMode: true,
+  reactStrictMode: false,
   experimental: {
     optimizePackageImports: ['recharts', 'framer-motion', 'date-fns'],
   },

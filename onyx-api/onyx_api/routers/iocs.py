@@ -9,12 +9,48 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from onyx_core.services import ElasticsearchService, RedisService
 
 router = APIRouter()
+
+
+# ============================================================================
+# Armed IOCs endpoint — serves pre-ingested OSINT data to the dashboard
+# ============================================================================
+
+@router.get("/iocs/armed", summary="Get armed in-memory OSINT IOCs")
+async def get_armed_iocs(request: Request) -> dict:
+    """
+    Returns all IOCs armed at startup from MISP, abuse.ch Feodo, URLhaus.
+    This is the primary real-time data source for the dashboard.
+    """
+    iocs = getattr(request.app.state, "armed_iocs", [])
+    by_source = getattr(request.app.state, "armed_iocs_by_source", {})
+    return {
+        "total": len(iocs),
+        "by_source": by_source,
+        "iocs": iocs,
+        "as_of": __import__('datetime').datetime.utcnow().isoformat() + "Z",
+    }
+
+
+@router.get("/iocs/armed/stats", summary="Armed IOC statistics by source")
+async def get_armed_stats(request: Request) -> dict:
+    iocs = getattr(request.app.state, "armed_iocs", [])
+    by_type: dict = {}
+    by_severity: dict = {}
+    by_source: dict = {}
+    for ioc in iocs:
+        t = ioc.get("type", "unknown")
+        s = ioc.get("severity", "medium")
+        src = ioc.get("source", "unknown")
+        by_type[t] = by_type.get(t, 0) + 1
+        by_severity[s] = by_severity.get(s, 0) + 1
+        by_source[src] = by_source.get(src, 0) + 1
+    return {"total": len(iocs), "by_type": by_type, "by_severity": by_severity, "by_source": by_source}
 
 
 # ============================================================================

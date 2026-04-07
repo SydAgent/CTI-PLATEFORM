@@ -114,11 +114,20 @@ export default function ThreatGraph() {
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [ForceGraph, setForceGraph] = useState<any>(null);
+  const [isWebGLSupported, setIsWebGLSupported] = useState<boolean | null>(null);
+
+  // WebGL Support Detection
+  useEffect(() => {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    setIsWebGLSupported(!!gl);
+  }, []);
 
   // Dynamically import react-force-graph-3d (SSR incompatible)
   useEffect(() => {
+    if (isWebGLSupported === false) return;
     import('react-force-graph-3d').then(mod => setForceGraph(() => mod.default));
-  }, []);
+  }, [isWebGLSupported]);
 
   // Fetch STIX data from API
   useEffect(() => {
@@ -181,7 +190,29 @@ export default function ThreatGraph() {
     return story;
   };
 
-  if (loading || !ForceGraph) {
+  if (isWebGLSupported === false) {
+    return (
+      <div className="onyx-card" style={{ height: '600px', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '20px', borderBottom: '1px solid #1f2937', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ color: '#ef4444', fontSize: 14 }}>⚠️ GRAPH ENGINE: SAFE MODE (2D)</h3>
+          <span style={{ fontSize: 10, color: '#6b7280' }}>WEBGL UNAVAILABLE</span>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 12 }}>
+            {graphData.nodes.map(node => (
+              <div key={node.id} onClick={() => setSelectedNode(node)} style={{ background: '#0a0a0a', border: `1px solid ${selectedNode?.id === node.id ? node.color : '#1f2937'}`, padding: 12, borderRadius: 8, cursor: 'pointer' }}>
+                <div style={{ fontSize: 18, marginBottom: 4 }}>{node.icon}</div>
+                <div style={{ fontSize: 12, fontWeight: 'bold', color: '#e5e7eb' }}>{node.name}</div>
+                <div style={{ fontSize: 10, color: '#6b7280' }}>{node.type}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading || !ForceGraph || isWebGLSupported === null) {
     return (
       <div className="onyx-card" style={{ height: '600px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div style={{ textAlign: 'center' }}>
