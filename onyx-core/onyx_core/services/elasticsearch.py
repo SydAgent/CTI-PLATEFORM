@@ -29,6 +29,7 @@ IOC_INDEX_SETTINGS: dict[str, Any] = {
         "number_of_shards": 2,
         "number_of_replicas": 0,  # Single-node; set to 1 in production cluster
         "refresh_interval": "5s",
+        "max_result_window": 50000,
         "analysis": {
             "analyzer": {
                 "ioc_analyzer": {
@@ -106,6 +107,7 @@ THREATS_INDEX_SETTINGS: dict[str, Any] = {
         "number_of_shards": 1,
         "number_of_replicas": 0,
         "refresh_interval": "10s",
+        "max_result_window": 50000,
     },
     "mappings": {
         "dynamic": "strict",
@@ -142,6 +144,7 @@ AUDIT_INDEX_SETTINGS: dict[str, Any] = {
         "number_of_shards": 1,
         "number_of_replicas": 0,
         "refresh_interval": "30s",
+        "max_result_window": 50000,
     },
     "mappings": {
         "properties": {
@@ -202,6 +205,8 @@ class ElasticsearchService:
         self._client = AsyncElasticsearch(
             hosts=[cfg.url],
             basic_auth=(cfg.user, cfg.password),
+            verify_certs=False,
+            ssl_show_warn=False,
             request_timeout=30,
             max_retries=3,
             retry_on_timeout=True,

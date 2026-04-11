@@ -8,7 +8,7 @@ import AttackMatrix from '@/components/AttackMatrix';
 import SciBERTEnginePanel from '@/components/SciBERTEnginePanel';
 import SIEMRuleConverter from '@/components/SIEMRuleConverter';
 import NLPAnalyzer from '@/components/NLPAnalyzer';
-import AgenticCopilot from '@/components/AgenticCopilot';
+
 import IntelligenceBrief from '@/components/IntelligenceBrief';
 
 // ─── CSR-ONLY WebGL components ──────────────────────────────────────────────
@@ -701,9 +701,6 @@ export default function DashboardClient() {
 
         {activeTab === 'attack' && <AttackMatrix />}
       </main>
-      
-      {/* GLOBAL AGENT COPILOT */}
-      <AgenticCopilot />
     </div>
   );
 }

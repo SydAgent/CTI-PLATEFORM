@@ -16,6 +16,7 @@
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
     "deck.gl": "^9.2.11",
+    "deep-chat-react": "^2.4.2",
     "framer-motion": "^11.1.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.7.0",
