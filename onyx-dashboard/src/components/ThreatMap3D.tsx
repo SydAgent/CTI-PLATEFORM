@@ -24,7 +24,7 @@ const MAJOR_CITIES = [
   { lon: 34.8, lat: 31.0, name: 'Israel', ip: '77.83.36.18' }
 ];
 
-export default function ThreatMap3D() {
+export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] }) {
   const [DeckGL, setDeckGL] = useState<any>(null);
   const [deckLayers, setDeckLayers] = useState<any>(null);
   const [MapGL, setMapGL] = useState<any>(null);
@@ -33,6 +33,46 @@ export default function ThreatMap3D() {
   const [geoData, setGeoData] = useState(null);
   const [hoverInfo, setHoverInfo] = useState<any>(null);
   const [isWebGLSupported, setIsWebGLSupported] = useState<boolean | null>(null);
+  const [lastSync, setLastSync] = useState(Date.now());
+  const [syncStr, setSyncStr] = useState('0');
+  const [pulseSync, setPulseSync] = useState(false);
+  const [geoArticles, setGeoArticles] = useState<any[]>([]);
+  const [geoMarkers, setGeoMarkers] = useState<any[]>([]);
+
+  // Poll geopolitical threats from backend every 30s
+  useEffect(() => {
+    const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const fetchGeo = () => {
+      fetch(`${API}/api/v1/dashboard/geopolitical/threats`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.threats) setGeoArticles(data.threats.slice(0, 10));
+          if (data.markers) setGeoMarkers(data.markers);
+          setLastSync(Date.now());
+          setPulseSync(true);
+          setTimeout(() => setPulseSync(false), 800);
+        })
+        .catch(() => {});
+    };
+    fetchGeo();
+    const interval = setInterval(fetchGeo, 30_000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (liveEvents && liveEvents.length > 0) {
+      setLastSync(Date.now());
+      setPulseSync(true);
+      setTimeout(() => setPulseSync(false), 800);
+    }
+  }, [liveEvents]);
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      setSyncStr(Math.floor((Date.now() - lastSync) / 1000).toString());
+    }, 1000);
+    return () => clearInterval(t);
+  }, [lastSync]);
 
   // WebGL Support Detection
   useEffect(() => {
@@ -63,31 +103,43 @@ export default function ThreatMap3D() {
       .catch(console.error);
   }, []);
 
-  // Simulate incoming attacks
+  // Real-time Mapping of Incoming Events
   useEffect(() => {
-    const t = setInterval(() => {
-      const srcIdx = Math.floor(Math.random() * MAJOR_CITIES.length);
-      let dstIdx = Math.floor(Math.random() * MAJOR_CITIES.length);
-      while(dstIdx === srcIdx) dstIdx = Math.floor(Math.random() * MAJOR_CITIES.length);
-      
-      const src = MAJOR_CITIES[srcIdx];
-      const dst = MAJOR_CITIES[dstIdx];
+    if (!liveEvents || liveEvents.length === 0) return;
 
-      setArcs(prev => [
-        ...prev.slice(-30),
-        {
-          source: [src.lon, src.lat],
-          target: [dst.lon, dst.lat],
-          srcName: src.name,
-          dstName: dst.name,
-          srcIp: src.ip,
-          timestamp: Date.now(),
-          color: [255, Math.floor(Math.random() * 100), 0]
-        }
-      ]);
-    }, 1200);
-    return () => clearInterval(t);
-  }, []);
+    const deterministicGeoHash = (str: string) => {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0; 
+      }
+      return Math.abs(hash);
+    };
+
+    // For the demo, target is the primary operations center (US)
+    const TARGET = MAJOR_CITIES[0];
+
+    const newArcs = liveEvents.slice(-30).map((ev, i) => {
+      const val = ev.data?.value || `10.0.0.${i}`;
+      const hash = deterministicGeoHash(val);
+      
+      // Deterministically select source from known threat geographies based on the IOC value
+      const srcIdx = (hash % (MAJOR_CITIES.length - 1)) + 1;
+      const src = MAJOR_CITIES[srcIdx];
+
+      return {
+        source: [src.lon, src.lat],
+        target: [TARGET.lon, TARGET.lat],
+        srcName: src.name,
+        dstName: TARGET.name,
+        srcIp: val,
+        timestamp: new Date(ev.timestamp).getTime(),
+        color: ev.data?.confidence && ev.data.confidence > 95 ? [255, 60, 92] : [255, 165, 0]
+      };
+    });
+
+    setArcs(newArcs);
+  }, [liveEvents]);
 
   const activeCountries = useMemo(() => {
     const set = new Set<string>();
@@ -180,10 +232,15 @@ export default function ThreatMap3D() {
   }
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '400px', background: '#050a0f', borderRadius: '12px', overflow: 'hidden', border: '1px solid rgba(0, 238, 255, 0.2)', boxShadow: '0 0 50px rgba(0,0,0,0.8) inset' }}>
-      <div style={{ position: 'absolute', top: 12, left: 16, zIndex: 10, fontFamily: 'monospace', fontSize: '11px', color: '#ff0040', background: 'rgba(5, 10, 15, 0.9)', padding: '6px 12px', borderRadius: '4px', border: '1px solid rgba(255,0,64,0.4)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff0040', display: 'inline-block', boxShadow: '0 0 8px #ff0040' }} className="pulse-live" />
-        GEOPOLITICAL THREAT MATRIX
+    <div style={{ position: 'relative', width: '100%', height: '400px', background: '#050a0f', borderRadius: '12px', overflow: 'hidden', border: pulseSync ? '1px solid rgba(255, 0, 64, 0.8)' : '1px solid rgba(0, 238, 255, 0.2)', boxShadow: pulseSync ? '0 0 80px rgba(255,0,64,0.3) inset' : '0 0 50px rgba(0,0,0,0.8) inset', transition: 'all 0.5s ease-out' }}>
+      <div style={{ position: 'absolute', top: 12, left: 16, zIndex: 10, fontFamily: 'monospace', fontSize: '11px', color: '#ff0040', background: 'rgba(5, 10, 15, 0.9)', padding: '6px 12px', borderRadius: '4px', border: '1px solid rgba(255,0,64,0.4)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ff0040', display: 'inline-block', boxShadow: '0 0 8px #ff0040' }} className="pulse-live" />
+          <span className="font-bold">GEOPOLITICAL THREAT MATRIX</span>
+        </div>
+        <div style={{ color: pulseSync ? '#ff3b5c' : '#6b7280', fontSize: '9px', fontWeight: 'bold' }}>
+          Dernière synchronisation : il y a {syncStr} secondes
+        </div>
       </div>
 
       <DeckGL
@@ -225,6 +282,34 @@ export default function ThreatMap3D() {
           </div>
         </div>
       )}
+
+      {/* Geopolitical Marker Count Badge */}
+      <div style={{ position: 'absolute', top: 12, right: 16, zIndex: 10, fontFamily: 'monospace', fontSize: '10px', color: '#00eeff', background: 'rgba(5,10,15,0.9)', padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(0,238,255,0.3)' }}>
+        {geoMarkers.length} active regions · {geoArticles.length} intel articles
+      </div>
+
+      {/* Live Geopolitical Intelligence Ticker */}
+      {geoArticles.length > 0 && (
+        <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, zIndex: 10, background: 'rgba(5,10,15,0.92)', borderTop: '1px solid rgba(255,0,64,0.3)', padding: '6px 16px', display: 'flex', gap: '24px', overflow: 'hidden' }}>
+          <span style={{ color: '#ff0040', fontFamily: 'monospace', fontSize: '9px', fontWeight: 'bold', whiteSpace: 'nowrap', flexShrink: 0 }}>⚡ LIVE INTEL</span>
+          <div style={{ overflow: 'hidden', flex: 1 }}>
+            <div style={{ display: 'flex', gap: '40px', animation: 'ticker-scroll 30s linear infinite', whiteSpace: 'nowrap' }}>
+              {geoArticles.map((art: any, i: number) => (
+                <span key={i} style={{ fontFamily: 'monospace', fontSize: '9px', color: '#94a3b8' }}>
+                  <span style={{ color: '#f59e0b' }}>[{art.source}]</span> {art.title}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes ticker-scroll {
+          0% { transform: translateX(0); }
+          100% { transform: translateX(-50%); }
+        }
+      `}</style>
     </div>
   );
 }

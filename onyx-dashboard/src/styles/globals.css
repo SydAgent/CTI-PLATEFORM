@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /* ============================================================================
    ONYX CTI PLATFORM — Design System
    Military-grade dark theme with neon accents, glassmorphism, and micro-animations.

@@ -1,203 +1,204 @@
 'use client';
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-
-/**
- * OnyxCopilot — Deep Chat–powered floating chatbot widget.
- *
- * Renders a Floating Action Button (FAB) in the bottom-right corner.
- * Clicking it opens a <DeepChat /> window connected to the ONYX backend
- * via the existing SSE streaming endpoint (/api/v1/agent/chat/stream).
- *
- * deep-chat is a Web Component, so we dynamically import it to avoid
- * Next.js SSR issues and interact with it via ref + vanilla DOM attrs.
- */
+import { TerminalMessage } from './chat/TerminalMessage';
+import { CommandInput } from './chat/CommandInput';
+import { Activity, ShieldAlert } from 'lucide-react';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  tags?: string[];
+  isStreaming?: boolean;
+  isGuardrailBlock?: boolean;
+  isQuotaBlock?: boolean;
+}
+
 export default function OnyxCopilot() {
   const [isOpen, setIsOpen] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
-  const chatRef = useRef<any>(null);
   const pathname = usePathname();
+  const [sessionId, setSessionId] = useState<string | null>(null);
 
-  // ── Dynamic import of the deep-chat Web Component ──────────────────────
-  // deep-chat registers a <deep-chat> custom element on the window.
-  // We import it once on mount (client-side only).
-  useEffect(() => {
-    let cancelled = false;
-    import('deep-chat-react').then(() => {
-      if (!cancelled) setIsLoaded(true);
-    });
-    return () => { cancelled = true; };
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: "## ONYX COPILOT\n\nAwaiting contextual instructions. Synchronized with live threat feeds.",
+      tags: ['SYSTEM', 'READY']
+    }
+  ]);
+  const [isLoading, setIsLoading] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
-  // ── Configure the <deep-chat> element once the ref is available ────────
   useEffect(() => {
-    // Re-run whenever the chat opens, the component loads, or the page changes
-    const el = chatRef.current;
-    if (!el || !isOpen) return;
+    if (isOpen) {
+      scrollToBottom();
+    }
+  }, [messages, isLoading, isOpen, scrollToBottom]);
 
-    // -- Connect: native deep-chat SSE stream mode --------------------------
-    // The backend (POST /api/v1/agent/chat/stream) now emits compliant SSE:
-    //   data: {"text": "word "}\n\n
-    // So we can use deep-chat's built-in stream support directly.
-    el.connect = {
-      url: `${API_BASE}/api/v1/agent/chat/stream`,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      stream: true,
+  const handleSendMessage = async (content: string) => {
+    // Abort any in-flight stream
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content,
     };
 
-    // -- Context-Awareness: inject current page into every request ----------
-    // deep-chat calls this function before sending each request.
-    // We add "current_page" so the backend/LLM knows what the analyst is viewing.
-    el.requestInterceptor = (details: any) => {
-      const body = details.body;
-      if (body && typeof body === 'object') {
-        body.current_page = pathname || '/';
+    const aiMessageId = (Date.now() + 1).toString();
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: content,
+          session_id: sessionId,
+          context: { current_page: pathname },
+        }),
+        signal: controller.signal,
+      });
+
+      // ── Handle 403 Guardrail Block ──────────────────────────────
+      if (response.status === 403) {
+        let errorMsg = 'Security policy violation detected.';
+        try {
+          const errBody = await response.json();
+          errorMsg = errBody?.detail?.error || errBody?.error || errorMsg;
+        } catch { /* use default */ }
+
+        const blockedMessage: ChatMessage = {
+          id: aiMessageId,
+          role: 'assistant',
+          content: `**⛔ GUARDRAIL BLOCK**\n\n\`${errorMsg}\`\n\nYour query was rejected by the ONYX security policy engine. Rephrase your request within CTI/OSINT scope.`,
+          tags: ['BLOCKED', 'GUARDRAIL'],
+          isGuardrailBlock: true,
+        };
+        setMessages(prev => [...prev, blockedMessage]);
+        setIsLoading(false);
+        return;
       }
-      return details;
-    };
 
-    // -- Intro message ────────────────────────────────────────────────────
-    el.introMessage = {
-      text: '🔒 **ONYX Copilot** connecté.\nInterrogez vos flux Threat Intel en temps réel.',
-    };
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
 
-    // -- Styling: deep cyber dark theme ──────────────────────────────────
-    el.style.cssText = `
-      width: 100%;
-      height: 100%;
-      border: none;
-      border-radius: 0;
-      font-family: 'Inter', sans-serif;
-      --deep-chat-bg: #0a0f1a;
-    `;
+      // ── Capture session ID from headers ─────────────────────────
+      const newSessionId = response.headers.get('X-Session-Id');
+      if (newSessionId) {
+        setSessionId(newSessionId);
+      }
 
-    el.chatStyle = {
-      backgroundColor: '#0a0f1a',
-    };
+      // ── SSE Stream Processing ───────────────────────────────────
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
 
-    el.messageStyles = {
-      default: {
-        shared: {
-          bubble: {
-            backgroundColor: 'rgba(255,255,255,0.04)',
-            color: '#e8ecf4',
-            borderRadius: '14px',
-            fontSize: '13px',
-            lineHeight: '1.6',
-            padding: '14px 18px',
-            border: '1px solid rgba(255,255,255,0.06)',
-          },
-        },
-        user: {
-          bubble: {
-            backgroundColor: 'rgba(0, 240, 255, 0.1)',
-            border: '1px solid rgba(0, 240, 255, 0.25)',
-            color: '#e8ecf4',
-            borderBottomRightRadius: '4px',
-          },
-        },
-        ai: {
-          bubble: {
-            backgroundColor: 'rgba(168, 85, 247, 0.08)',
-            border: '1px solid rgba(168, 85, 247, 0.2)',
-            color: '#e8ecf4',
-            borderBottomLeftRadius: '4px',
-          },
-        },
-      },
-      loading: {
-        bubble: {
-          backgroundColor: 'rgba(255,255,255,0.03)',
-          color: '#00f0ff',
-          fontSize: '12px',
-        },
-      },
-    };
+      const decoder = new TextDecoder();
+      let accumulatedText = '';
 
-    el.textInput = {
-      placeholder: { text: 'Interrogez ONYX Copilot...' },
-      styles: {
-        container: {
-          backgroundColor: '#121828',
-          border: '1px solid rgba(255,255,255,0.1)',
-          borderRadius: '12px',
-          color: '#e8ecf4',
-          boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)',
-        },
-        text: {
-          color: '#e8ecf4',
-          fontSize: '13px',
-        },
-        focus: {
-          border: '1px solid rgba(0, 240, 255, 0.5)',
-        },
-      },
-    };
+      // Create placeholder streaming message
+      setMessages(prev => [...prev, {
+        id: aiMessageId,
+        role: 'assistant',
+        content: '',
+        tags: [],
+        isStreaming: true,
+      }]);
 
-    el.submitButtonStyles = {
-      submit: {
-        container: {
-          default: {
-            backgroundColor: '#a855f7',
-            borderRadius: '8px',
-          },
-          hover: {
-            backgroundColor: '#9333ea',
-          },
-        },
-        svg: {
-          content:
-            '<?xml version="1.0" encoding="utf-8"?><svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" fill="white"/></svg>',
-          styles: {
-            default: {
-              filter: 'brightness(1)',
-            },
-          },
-        },
-      },
-      loading: {
-        container: {
-          default: {
-            backgroundColor: '#374151',
-            borderRadius: '8px',
-          },
-        },
-        svg: {
-          styles: {
-            default: {
-              filter: 'brightness(0.5)',
-            },
-          },
-        },
-      },
-    };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-    el.avatars = {
-      ai: {
-        src: '',
-        styles: {
-          avatar: { display: 'none' },
-        },
-      },
-      user: {
-        src: '',
-        styles: {
-          avatar: { display: 'none' },
-        },
-      },
-    };
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
 
-    el.names = {
-      ai: { text: 'ONYX COPILOT' },
-      user: { text: 'ANALYSTE' },
-    };
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const payload = line.slice(6).trim();
 
-  }, [isOpen, isLoaded, pathname]);
+          if (payload === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(payload);
+
+            if (parsed.error) {
+              // Error event from backend (output guardrail, etc.)
+              if (parsed.error === 'API_QUOTA_EXCEEDED') {
+                setMessages(prev => prev.map(m =>
+                  m.id === aiMessageId
+                    ? { ...m, isQuotaBlock: true, tags: ['QUOTA_EXHAUSTED'] }
+                    : m
+                ));
+              } else {
+                accumulatedText += `\n\n**⚠️ ${parsed.error}**`;
+                setMessages(prev => prev.map(m =>
+                  m.id === aiMessageId
+                    ? { ...m, content: accumulatedText, tags: ['WARNING'] }
+                    : m
+                ));
+              }
+              continue;
+            }
+
+            if (parsed.text) {
+              accumulatedText += parsed.text;
+              setMessages(prev => prev.map(m =>
+                m.id === aiMessageId
+                  ? { ...m, content: accumulatedText }
+                  : m
+              ));
+            }
+          } catch {
+            // Non-JSON line — skip
+          }
+        }
+      }
+
+      // Finalize streaming message
+      setMessages(prev => prev.map(m =>
+        m.id === aiMessageId
+          ? { ...m, isStreaming: false }
+          : m
+      ));
+
+    } catch (error: any) {
+      if (error.name === 'AbortError') return;
+
+      const errorMessage: ChatMessage = {
+        id: aiMessageId,
+        role: 'assistant',
+        content: `**[TRANSACTION FAILURE]**\n\nAnalysis interrupted.\nReason: ${error.message}`,
+        tags: ['CRITICAL', 'ERROR']
+      };
+      setMessages(prev => {
+        // Replace streaming placeholder or append
+        const exists = prev.some(m => m.id === aiMessageId);
+        if (exists) {
+          return prev.map(m => m.id === aiMessageId ? errorMessage : m);
+        }
+        return [...prev, errorMessage];
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
@@ -269,7 +270,7 @@ export default function OnyxCopilot() {
                     marginTop: 2,
                   }}
                 >
-                  Deep Chat · LLM Bridge · Live
+                  RAG Pipeline · Gemini 2.0 · Live
                 </div>
               </div>
             </div>
@@ -303,29 +304,95 @@ export default function OnyxCopilot() {
             </button>
           </div>
 
-          {/* ── Deep Chat Body ──────────────────────────────────── */}
-          <div style={{ flex: 1, overflow: 'hidden' }}>
-            {isLoaded ? (
-              // @ts-ignore — deep-chat is a Web Component, TS doesn't know it
-              <deep-chat
-                ref={chatRef}
-                style={{ width: '100%', height: '100%', border: 'none' }}
-              />
-            ) : (
-              <div
-                style={{
-                  height: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#5a6478',
-                  fontSize: 12,
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              >
-                Chargement du moteur LLM…
+          {/* ── Chat Body ──────────────────────────────────── */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {messages.map((msg) => (
+              <div key={msg.id}>
+                {msg.isGuardrailBlock ? (
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: 10,
+                      background: 'rgba(255, 59, 92, 0.08)',
+                      border: '1px solid rgba(255, 59, 92, 0.3)',
+                      display: 'flex',
+                      gap: 10,
+                      alignItems: 'flex-start',
+                      animation: 'copilotSlideUp 0.2s ease-out',
+                    }}
+                  >
+                    <ShieldAlert size={18} style={{ color: '#ff3b5c', flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#ff3b5c', lineHeight: 1.6 }}>
+                      <div style={{ fontWeight: 800, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        ⛔ GUARDRAIL BLOCK
+                      </div>
+                      <div style={{ color: '#ff8a9e' }}>
+                        Your query was rejected by the ONYX security policy engine. Rephrase within CTI/OSINT scope.
+                      </div>
+                    </div>
+                  </div>
+                ) : msg.isQuotaBlock ? (
+                  <div
+                    style={{
+                      padding: '12px 16px',
+                      borderRadius: 10,
+                      background: 'rgba(255, 171, 0, 0.08)',
+                      border: '1px solid rgba(255, 171, 0, 0.3)',
+                      display: 'flex',
+                      gap: 10,
+                      alignItems: 'flex-start',
+                      animation: 'copilotSlideUp 0.2s ease-out',
+                    }}
+                  >
+                    <Activity size={18} style={{ color: '#ffab00', flexShrink: 0, marginTop: 2, animation: 'copilotPulse 2s ease-in-out infinite' }} />
+                    <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 12, color: '#ffab00', lineHeight: 1.6 }}>
+                      <div style={{ fontWeight: 800, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '1px' }}>
+                        ⚠️ SYSTEM ALERT
+                      </div>
+                      <div style={{ color: '#ffc107' }}>
+                        Intelligence Feed Quota Exhausted. The upstream API gateway has throttled your billing account.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <TerminalMessage
+                    role={msg.role}
+                    content={msg.content}
+                    tags={msg.tags}
+                  />
+                )}
+              </div>
+            ))}
+
+            {isLoading && !messages.some(m => m.isStreaming) && (
+              <div className="flex w-full gap-4 p-4 rounded-lg bg-[#0c1019]/80 border border-[#1a2236]">
+                <div className="w-8 h-8 rounded bg-[#1a2236] border border-[#00f0ff]/30 flex items-center justify-center shrink-0">
+                  <Activity size={16} className="text-[#00f0ff] animate-pulse" />
+                </div>
+                <div className="flex flex-col gap-2 w-full">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-[#00f0ff]">ONYX TACTICAL AI</span>
+                    <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded border bg-[#00f0ff]/10 text-[#00f0ff] border-[#00f0ff]/30 animate-pulse">
+                      PROCESSING
+                    </span>
+                  </div>
+                  <div className="text-sm font-mono text-[#8b95a8] animate-pulse">
+                    Querying RAG pipeline...
+                  </div>
+                </div>
               </div>
             )}
+
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* ── Input Area ─────────────────────────────────── */}
+          <div className="p-4 border-t border-[#1a2236] bg-[#0c1019]/90 shrink-0">
+            <CommandInput onSend={handleSendMessage} isLoading={isLoading} />
+            <div className="flex justify-between items-center mt-2 px-1">
+               <span className="text-[9px] font-mono text-[#5a6478]">RAG + Guardrails Active</span>
+               <span className="text-[9px] font-mono text-[#5a6478]">Gemini 2.0 Flash</span>
+            </div>
           </div>
         </div>
       )}
@@ -334,7 +401,7 @@ export default function OnyxCopilot() {
       <button
         id="onyx-copilot-fab"
         onClick={() => setIsOpen((prev) => !prev)}
-        aria-label="Ouvrir ONYX Copilot"
+        aria-label="Open ONYX Copilot"
         style={{
           position: 'fixed',
           bottom: 28,
@@ -355,7 +422,6 @@ export default function OnyxCopilot() {
             ? '0 8px 32px rgba(255, 59, 92, 0.5)'
             : '0 8px 32px rgba(168, 85, 247, 0.5)',
           transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
-          transform: isOpen ? 'rotate(0deg)' : 'rotate(0deg)',
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.transform = 'scale(1.1)';
@@ -365,7 +431,6 @@ export default function OnyxCopilot() {
         }}
       >
         {isOpen ? (
-          // Close icon (X)
           <svg
             width="22"
             height="22"
@@ -379,7 +444,6 @@ export default function OnyxCopilot() {
             <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         ) : (
-          // Robot icon
           <svg
             width="26"
             height="26"

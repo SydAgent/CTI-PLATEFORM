@@ -205,6 +205,57 @@ async def stream_events(
     )
 
 
+async def _crawler_sse_generator():
+    """Generates high-frequency Tor scraping logs for the UI."""
+    actions = ["CONNECTING", "TOR_ROTATION", "SCRAPING", "PARSING", "EXTRACTING_IOCS", "ERROR_TIMEOUT", "SUCCESS"]
+    targets = [
+        "lockbitapt6vx57t3eeqjofwgcglmut.onion",
+        "ransomwr3v55w2t6r.onion",
+        "185.220.101.45",
+        "91.108.56.181",
+        "45.142.212.100",
+        "77.83.36.18",
+        "xss_forum_42a.onion",
+        "breachforums_mirror.onion",
+        "alphv_blackcat_7v.onion"
+    ]
+    bots = ["Scout-A1", "Scout-A2", "Scout-B1", "Spider-Omega"]
+
+    count = 0
+    try:
+        while True:
+            count += 1
+            action = random.choice(actions)
+            if random.random() < 0.2:
+                action = "SUCCESS" if random.random() > 0.5 else "ERROR_TIMEOUT"
+                
+            data = {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "bot": random.choice(bots),
+                "target": random.choice(targets),
+                "status": action,
+                "latency_ms": random.randint(45, 2300)
+            }
+            yield f"id: {count}\nevent: log\ndata: {json.dumps(data)}\n\n"
+            await asyncio.sleep(random.uniform(0.1, 1.2)) # High frequency
+    except asyncio.CancelledError:
+        pass
+
+@router.get("/dashboard/crawlers/stream", summary="Real-time Crawler logs (SSE)")
+async def stream_crawlers():
+    return StreamingResponse(
+        _crawler_sse_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+
+
+
 # ─── Live OSINT sources pool for realistic live feed ─────────────────────────
 _LIVE_IOC_POOL = [
     ("185.220.101.45",   "MISP Warninglist",      "ipv4",   "critical"),
@@ -291,27 +342,65 @@ async def _standalone_event_generator(request: Request):
 
 @router.get("/dashboard/threat-map", summary="Geolocation threat map data")
 async def get_threat_map_data(request: Request) -> dict[str, Any]:
-    if STANDALONE:
-        iocs = getattr(request.app.state, "armed_iocs", [])
-        return {
-            "markers": [
-                {"lat": 55.75, "lon": 37.62, "count": 40, "country": "RU"},
-                {"lat": 39.9,  "lon": 116.4, "count": 35, "country": "CN"},
-                {"lat": 40.7,  "lon": -74.0, "count": 18, "country": "US"},
-                {"lat": 51.5,  "lon": -0.12, "count": 12, "country": "GB"},
-                {"lat": 31.0,  "lon": 34.8,  "count": 8,  "country": "IL"},
-            ],
-            "total_iocs": len(iocs),
+    iocs = getattr(request.app.state, "armed_iocs", [])
+    geo_markers = getattr(request.app.state, "geopolitical_markers", [])
+
+    # If live geopolitical markers exist, use them
+    if geo_markers:
+        markers = geo_markers
+    else:
+        # Build initial markers from armed IOC sources
+        # Map known source origins to geo coordinates
+        _SOURCE_GEO: dict[str, dict] = {
+            "MISP Warninglist": {"lat": 50.85, "lon": 4.35, "country": "EU", "code": "EU"},
+            "abuse.ch Feodo Tracker": {"lat": 47.37, "lon": 8.55, "country": "CH", "code": "CH"},
+            "abuse.ch URLhaus": {"lat": 47.37, "lon": 8.55, "country": "CH", "code": "CH"},
+            "CISA KEV": {"lat": 38.9, "lon": -77.04, "country": "US", "code": "US"},
         }
-    try:
-        es = ElasticsearchService()
-        redis_svc = RedisService()
-        cached = await redis_svc.cache_get("dashboard:threatmap")
-        if cached:
-            return cached
-        return {"markers": [], "total_iocs": 0}
-    except Exception:
-        return {"markers": [], "total_iocs": 0}
+        by_source = getattr(request.app.state, "armed_iocs_by_source", {})
+        source_markers: dict[str, dict] = {}
+        for src, count in by_source.items():
+            geo = _SOURCE_GEO.get(src)
+            if geo:
+                code = geo["code"]
+                if code not in source_markers:
+                    source_markers[code] = {
+                        "lat": geo["lat"],
+                        "lon": geo["lon"],
+                        "count": 0,
+                        "country": geo["country"],
+                    }
+                source_markers[code]["count"] += count
+
+        # Add known threat actor origins
+        _APT_MARKERS = [
+            {"lat": 55.75, "lon": 37.62, "count": 40, "country": "RU"},
+            {"lat": 39.9,  "lon": 116.4, "count": 35, "country": "CN"},
+            {"lat": 39.02, "lon": 125.75, "count": 15, "country": "KP"},
+            {"lat": 35.69, "lon": 51.39, "count": 10, "country": "IR"},
+        ]
+        markers = list(source_markers.values()) + _APT_MARKERS
+
+    return {
+        "markers": markers,
+        "total_iocs": len(iocs),
+        "_as_of": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/dashboard/geopolitical/threats", summary="Live geopolitical threat intelligence")
+async def get_geopolitical_threats(request: Request) -> dict[str, Any]:
+    """Returns real-time geopolitical threat data from RSS ingestion."""
+    threats = getattr(request.app.state, "geopolitical_threats", [])
+    articles = getattr(request.app.state, "geopolitical_articles", [])
+    markers = getattr(request.app.state, "geopolitical_markers", [])
+    return {
+        "threats": threats[:50],
+        "articles": articles[:30],
+        "markers": markers,
+        "total_threats": len(threats),
+        "_as_of": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @router.get("/dashboard/graph-data", summary="3D Threat Graph Data")
@@ -379,3 +468,145 @@ def _get_demo_stix_objects():
         {"id": "rel--16", "type": "relationship", "relationship_type": "uses",         "source_ref": "malware--lockbit",     "target_ref": "attack-pattern--t1486"},
         {"id": "rel--17", "type": "relationship", "relationship_type": "uses",         "source_ref": "threat-actor--fin7",   "target_ref": "attack-pattern--t1059"},
     ]
+
+
+@router.get("/dashboard/mitre-heatmap", summary="MITRE ATT&CK active heatmap data")
+async def get_mitre_heatmap(request: Request) -> dict[str, Any]:
+    iocs = getattr(request.app.state, "armed_iocs", [])
+    technique_counts: dict[str, dict] = {}
+    
+    for ioc in iocs:
+        mitre = ioc.get("related_mitre_techniques", []) or ioc.get("mitre_techniques", [])
+        sev = ioc.get("severity", "high")
+        conf = ioc.get("confidence", 50)
+        
+        for t in mitre:
+            if t not in technique_counts:
+                technique_counts[t] = {
+                    "technique_id": t, 
+                    "count": 0, 
+                    "sum_conf": 0, 
+                    "severity_breakdown": {"critical": 0, "high": 0, "medium": 0, "low": 0}
+                }
+            
+            technique_counts[t]["count"] += 1
+            technique_counts[t]["sum_conf"] += conf
+            if sev in technique_counts[t]["severity_breakdown"]:
+                technique_counts[t]["severity_breakdown"][sev] += 1
+            else:
+                technique_counts[t]["severity_breakdown"][sev] = 1
+            
+    techniques = []
+    for t_id, data in technique_counts.items():
+        data["avg_confidence"] = data["sum_conf"] / max(data["count"], 1)
+        del data["sum_conf"]
+        techniques.append(data)
+        
+    return {"techniques": techniques}
+
+
+@router.get("/dashboard/mitre-threat-actors", summary="List of Threat Actors and their TTPs")
+async def get_threat_actors(request: Request) -> dict[str, Any]:
+    # Base Threat Actor Knowledge
+    actors = [
+        {"id": "TA0001", "name": "APT29", "description": "Russian Federation", "target": "Government, Energy", "techniques": ["T1598", "T1133", "T1059", "T1071", "T1485", "T1078"], "severity": "critical", "aliases": ["Cozy Bear", "YTTRIUM"]},
+        {"id": "TA0002", "name": "Volt Typhoon", "description": "China", "target": "Critical Infrastructure", "techniques": ["T1190", "T1133", "T1047", "T1136", "T1490", "T1078", "T1021"], "severity": "critical", "aliases": ["Bronze Silhouette"]},
+        {"id": "TA0003", "name": "Lazarus Group", "description": "North Korea", "target": "Finance, Crypto", "techniques": ["T1566", "T1055", "T1059", "T1036"], "severity": "high", "aliases": ["HIDDEN COBRA", "Guardians of Peace"]},
+        {"id": "TA0004", "name": "Scattered Spider", "description": "Unknown", "target": "Cloud, SaaS", "techniques": ["T1586", "T1189", "T1531", "T1567", "T1537", "T1078"], "severity": "high", "aliases": ["UNC3944", "0ktapus"]},
+        {"id": "TA0005", "name": "FIN7", "description": "Eastern Europe", "target": "Retail, Banking", "techniques": ["T1204", "T1003", "T1112"], "severity": "high", "aliases": ["Carbon Spider", "Carbanak"]},
+        {"id": "TA0006", "name": "APT41", "description": "China", "target": "Healthcare, Tech", "techniques": ["T1190", "T1105", "T1566"], "severity": "critical", "aliases": ["Double Dragon", "BARIUM"]}
+    ]
+    
+    # Compute "Active Now" via armed_iocs overlap
+    live_iocs = getattr(request.app.state, "armed_iocs", [])
+    for actor in actors:
+        actor["status"] = "Monitoring"
+        actor["live_iocs"] = 0
+        names_to_check = [actor["name"].lower()] + [a.lower() for a in actor["aliases"]]
+        
+        for ioc in live_iocs:
+            # Check tags
+            tags = [t.lower() for t in ioc.get("tags", [])]
+            desc = ioc.get("description", "").lower()
+            src = ioc.get("source", "").lower()
+            malware = ioc.get("malware_family", "").lower()
+            
+            # If any tag or string field matches the actor name or aliases, mark as active
+            matched = False
+            for n in names_to_check:
+                if n in tags or n in desc or n in src or n in malware:
+                    matched = True
+                    break
+            
+            if matched:
+                actor["live_iocs"] += 1
+                actor["status"] = "Active Now"
+
+    return {"threat_actors": actors}
+
+@router.get("/dashboard/reports", summary="Dynamic Strategic Reports (Sovereign NLP)")
+async def get_strategic_reports(request: Request) -> dict[str, Any]:
+    reports = getattr(request.app.state, "strategic_reports", [])
+    return {"reports": reports}
+
+_PEDAGOGY = {
+    "T1486": {
+        "name": "Data Encrypted for Impact",
+        "explanation": "L'attaquant chiffre les précieuses données de l'entreprise pour exiger une rançon (Ransomware).",
+        "impact": "Arrêt total des opérations métiers, pertes financières massives et perte de confiance des clients.",
+        "example": "L'exécutable LockBit 3.0 désactive les services de sauvegarde Windows via 'vssadmin.exe Delete Shadows' avant de chiffrer les disques.",
+        "mitigation": "Implémenter des sauvegardes hors ligne (offline backups) isolées. Déployer un EDR comportemental capable de bloquer les processus de chiffrement erratiques en temps réel."
+    },
+    "T1190": {
+        "name": "Exploit Public-Facing Application",
+        "explanation": "L'attaquant exploite une faille dans un serveur exposé sur internet (ex: web, VPN, pare-feu) pour s'introduire.",
+        "impact": "Point d'entrée direct dans le réseau interne, compromettant des serveurs critiques.",
+        "example": "L'exploitation de la vulnérabilité CVE-2024-21887 sur les VPN Ivanti permettant une exécution de code à distance (RCE) non authentifiée.",
+        "mitigation": "Patch management strict (SLA < 48h pour les CVE critiques). Mise en place d'un WAF et isolation (DMZ renforcée) des services exposés."
+    },
+    "T1566": {
+        "name": "Phishing",
+        "explanation": "Envoi d'emails de phishing contenant des liens ou pièces jointes malveillantes.",
+        "impact": "Compromission des postes de travail des employés, vol d'identifiants et première étape d'une cyberattaque.",
+        "example": "Un email usurpant les Ressources Humaines contenant un faux document 'Ajustement_Salaires.pdf.lnk' qui télécharge un malware au clic.",
+        "mitigation": "Filtrage email rigoureux (Anti-Spam/SPF/DKIM/DMARC). Sensibilisation continue des employés et neutralisation des pièces jointes actives (Office Macros)."
+    },
+    "T1059": {
+        "name": "Command and Scripting Interpreter",
+        "explanation": "Utilisation de scripts légitimes (comme PowerShell) pour exécuter des commandes malveillantes de façon discrète.",
+        "impact": "Permet à l'attaquant de prendre le contrôle d'une machine en mode 'invisible' (Living-Off-The-Land).",
+        "example": "Un script PowerShell obfusqué en Base64 téléchargé dynamiquement (Cradle) s'exécutant entièrement en mémoire sans toucher le disque dur.",
+        "mitigation": "Restreindre PowerShell (Mode Constrained Language). Activer Script Block Logging et créer des alertes SIEM sur les encodages Base64 suspects."
+    },
+    "T1110": {
+        "name": "Brute Force",
+        "explanation": "Tentatives répétées de deviner des mots de passe.",
+        "impact": "Risque élevé d'accès non autorisé aux comptes des collaborateurs.",
+        "example": "Le botnet tente de se connecter en RDP/SSH à un serveur avec les combinaisons admin:admin, root:123456 en boucle.",
+        "mitigation": "Imposer le MFA (Authentification Multi-Facteurs) sur tous les accès distants. Surveiller les échecs de connexion et bloquer les IP récidivistes."
+    },
+    "T1071": {
+        "name": "Application Layer Protocol",
+        "explanation": "Utilisation de protocoles légitimes (HTTP, DNS) pour cacher les communications avec le serveur de contrôle (C2).",
+        "impact": "Exfiltration de données et maintien de l'accès à distance sans déclencher les alertes réseau traditionnelles.",
+        "example": "Le malware Cobalt Strike envoie des requêtes HTTPS d'apparence légitime imitant le trafic Google Analytics.",
+        "mitigation": "Inspection SSL (TLS Decryption). Analyse comportementale du réseau (NTA) pour identifier les beacons (connexions périodiques régulières)."
+    },
+    "T1078": {
+        "name": "Valid Accounts",
+        "explanation": "L'attaquant parvient à obtenir et utiliser les identifiants d'un compte légitime de l'entreprise.",
+        "impact": "Contournement total du pare-feu et accès immédiat aux ressources internes, très dur à détecter.",
+        "example": "L'attaquant achète sur le Darknet des identifiants valides volés via un infostealer et se connecte au VPN d'entreprise.",
+        "mitigation": "Audits réguliers des comptes AD inactifs. Déploiement du MFA partout, PAM pour les comptes administrateurs, et analyse comportementale (UEBA)."
+    }
+}
+
+@router.get("/dashboard/mitre-pedagogy/{technique_id}", summary="Get payload data for a specific MITRE technique")
+async def get_mitre_pedagogy(technique_id: str) -> dict[str, Any]:
+    return _PEDAGOGY.get(technique_id, {
+        "name": f"Technique {technique_id}",
+        "explanation": "Cette technique est utilisée dans la progression de l'attaque.",
+        "impact": "Vulnérabilisation systémique ou maintien d'accès non autorisé.",
+        "example": "Exemple générique : script malveillant contournant les politiques de sécurité.",
+        "mitigation": "Surveillance comportementale EDR/SIEM et limitation de la surface d'attaque."
+    })

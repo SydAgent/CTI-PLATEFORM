@@ -8,6 +8,14 @@ from __future__ import annotations
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+
+# Resolve the project root .env file (works regardless of CWD)
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+if not _ENV_FILE.exists():
+    # Fallback: try CWD
+    _ENV_FILE = Path(".env")
+_ENV_PATH = str(_ENV_FILE)
 
 
 class ElasticsearchConfig(BaseSettings):
@@ -117,12 +125,52 @@ class NLPConfig(BaseSettings):
     ioc_defang_enabled: bool = Field(default=True)
 
 
+class GeminiConfig(BaseSettings):
+    """Google Gemini LLM configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="GEMINI_", env_file=_ENV_PATH, extra="ignore")
+
+    api_key: str = Field(default="", description="Gemini API key — loaded from env only")
+    model: str = Field(default="gemini-2.5-flash")
+    temperature: float = Field(default=0.3)
+    max_output_tokens: int = Field(default=8192)
+    embedding_model: str = Field(default="gemini-embedding-2-preview")
+
+
+class QdrantConfig(BaseSettings):
+    """Qdrant vector store configuration.
+    When QDRANT_URL is empty → in-memory mode (zero infra).
+    When QDRANT_URL is set  → persistent remote mode.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="QDRANT_", env_file=_ENV_PATH, extra="ignore")
+
+    url: str = Field(default="", description="Remote Qdrant URL — empty = in-memory")
+    api_key: str = Field(default="", description="API key for managed Qdrant Cloud")
+    collection_name: str = Field(default="onyx_cti_iocs")
+
+    @property
+    def is_remote(self) -> bool:
+        """True if a remote Qdrant instance is configured."""
+        return bool(self.url)
+
+
+class GuardrailsConfig(BaseSettings):
+    """LLM security guardrails configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="GUARDRAILS_", env_file=_ENV_PATH, extra="ignore")
+
+    enabled: bool = Field(default=True)
+    max_input_length: int = Field(default=4000)
+    max_output_length: int = Field(default=16000)
+
+
 class OnyxConfig(BaseSettings):
     """Root configuration aggregating all sub-configs."""
 
     model_config = SettingsConfigDict(
         env_prefix="ONYX_",
-        env_file=".env",
+        env_file=_ENV_PATH,
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -169,6 +217,18 @@ class OnyxConfig(BaseSettings):
     @property
     def nlp(self) -> NLPConfig:
         return NLPConfig()
+
+    @property
+    def gemini(self) -> GeminiConfig:
+        return GeminiConfig()
+
+    @property
+    def qdrant(self) -> QdrantConfig:
+        return QdrantConfig()
+
+    @property
+    def guardrails(self) -> GuardrailsConfig:
+        return GuardrailsConfig()
 
 
 # Singleton instance

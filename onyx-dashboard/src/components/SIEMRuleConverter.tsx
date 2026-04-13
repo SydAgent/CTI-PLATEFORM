@@ -1,17 +1,25 @@
 "use client";
 
-import { useState, useEffect, useId } from 'react';
-
-const MISP_IOC_SAMPLES = [
-  '185.220.101.45', '91.108.56.181', '5.188.86.172', '194.165.16.78',
-  '45.142.212.100', '77.83.36.18', '195.123.246.138', '91.219.236.137',
-];
+import { useState, useEffect, useId, useMemo } from 'react';
+import { useThreatStream } from './DashboardClient';
 
 export default function SIEMRuleConverter({ activeIoc }: { activeIoc?: string }) {
   const [engine, setEngine] = useState<'SIGMA' | 'YARA' | 'SNORT'>('SIGMA');
   const [ruleId, setRuleId] = useState('');
   const [ruleDate, setRuleDate] = useState('');
-  const [rotatingIoc, setRotatingIoc] = useState(activeIoc || MISP_IOC_SAMPLES[0]);
+  const [rotatingIdx, setRotatingIdx] = useState(0);
+  const { armedIocs } = useThreatStream() || { armedIocs: [] };
+
+  // Extract live IOC values for rotation
+  const liveIocValues = useMemo(() => {
+    const vals = armedIocs
+      .filter((ioc: any) => ioc.type === 'ipv4' && ioc.confidence >= 90)
+      .slice(0, 20)
+      .map((ioc: any) => ioc.value);
+    return vals.length > 0 ? vals : ['0.0.0.0'];
+  }, [armedIocs]);
+
+  const rotatingIoc = activeIoc || liveIocValues[rotatingIdx % liveIocValues.length];
 
   const uid = useId();
 
@@ -19,12 +27,8 @@ export default function SIEMRuleConverter({ activeIoc }: { activeIoc?: string })
   useEffect(() => {
     setRuleId(crypto.randomUUID());
     setRuleDate(new Date().toISOString().split('T')[0]);
-    // Rotate through real MISP IOC samples every 5s for live demo effect
     const interval = setInterval(() => {
-      setRotatingIoc(prev => {
-        const idx = MISP_IOC_SAMPLES.indexOf(prev);
-        return MISP_IOC_SAMPLES[(idx + 1) % MISP_IOC_SAMPLES.length];
-      });
+      setRotatingIdx(prev => prev + 1);
       setRuleId(crypto.randomUUID());
     }, 5000);
     return () => clearInterval(interval);
@@ -89,14 +93,19 @@ alert tcp $HOME_NET any -> ${target} any (
   };
 
   const tabConfig = {
-    SIGMA: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: '#f59e0b' },
-    YARA:  { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: '#ef4444' },
-    SNORT: { color: '#a855f7', bg: 'rgba(168,85,247,0.1)',  border: '#a855f7' },
+    SIGMA: { color: '#f59e0b', bg: 'rgba(245,158,11,0.1)', border: '#f59e0b', desc: 'Generic SIEM log signatures — vendor-agnostic detection' },
+    YARA:  { color: '#ef4444', bg: 'rgba(239,68,68,0.1)',   border: '#ef4444', desc: 'File & memory pattern matching — malware hunting' },
+    SNORT: { color: '#a855f7', bg: 'rgba(168,85,247,0.1)',  border: '#a855f7', desc: 'Network intrusion detection — packet-level signatures' },
   };
 
   return (
     <div style={{ background: '#050505', borderRadius: 12, border: '1px solid #1f2937', display: 'flex', flexDirection: 'column', height: '100%', minHeight: 400, overflow: 'hidden' }}>
-      {/* Header */}
+      {/* Title */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid #111', background: '#080808' }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#e5e7eb', marginBottom: 2 }}>⚙ Detection Engineering</div>
+        <div style={{ fontSize: 10, color: '#4b5563', fontFamily: 'monospace' }}>Auto-compiled detection rules from live OSINT IOC streams</div>
+      </div>
+      {/* Engine Tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid #1f2937', background: '#0a0a0a' }}>
         {(['SIGMA', 'YARA', 'SNORT'] as const).map(tab => (
           <button
@@ -124,13 +133,23 @@ alert tcp $HOME_NET any -> ${target} any (
         <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#00eeff', background: 'rgba(0,238,255,0.05)', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(0,238,255,0.2)' }}>
           {target}
         </span>
-        <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#22c55e' }}>● LIVE MISP FEED</span>
+        <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#22c55e' }}>● LIVE OSINT</span>
+      </div>
+
+      {/* Pedagogical Description */}
+      <div style={{ padding: '6px 14px', background: '#060606', borderBottom: '1px solid #111' }}>
+        <p style={{ fontSize: 10, color: '#64748b', fontFamily: 'monospace', margin: 0 }}>{tabConfig[engine].desc}</p>
       </div>
 
       {/* Rule code */}
       <div style={{ flex: 1, padding: 16, overflow: 'auto', background: '#000', fontFamily: 'monospace', fontSize: 11 }}>
         <pre style={{ color: tabConfig[engine].color, opacity: 0.85, lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>
-          {rules[engine]}
+          {rules[engine].split('\n').map((line, i) => (
+            <div key={i} style={{ display: 'flex' }}>
+              <span style={{ color: '#334155', width: 28, textAlign: 'right', marginRight: 12, userSelect: 'none', flexShrink: 0 }}>{i + 1}</span>
+              <span>{line}</span>
+            </div>
+          ))}
         </pre>
       </div>
     </div>

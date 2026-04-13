@@ -66,7 +66,7 @@ class IOCCreateRequest(BaseModel):
     confidence: int = Field(default=50, ge=0, le=100)
     severity: str = Field(default="medium", description="critical/high/medium/low/info")
     tags: list[str] = Field(default_factory=list)
-    mitre_techniques: list[str] = Field(default_factory=list)
+    related_mitre_techniques: list[str] = Field(default_factory=list, alias="mitre_techniques")
     tlp: str = Field(default="TLP:GREEN")
     context: str | None = Field(default=None, description="Context text where the IOC was found")
     raw_text: str | None = Field(default=None)
@@ -89,7 +89,7 @@ class IOCResponse(BaseModel):
     confidence: int
     severity: str
     tags: list[str]
-    mitre_techniques: list[str]
+    related_mitre_techniques: list[str] = Field(default_factory=list, alias="mitre_techniques")
     tlp: str
     first_seen: str | None = None
     last_seen: str | None = None
@@ -135,7 +135,7 @@ async def create_ioc(request: IOCCreateRequest) -> dict[str, Any]:
         "confidence": request.confidence,
         "severity": request.severity,
         "tags": request.tags,
-        "mitre_techniques": request.mitre_techniques,
+        "related_mitre_techniques": request.related_mitre_techniques,
         "tlp": request.tlp,
         "context": request.context,
         "raw_text": request.raw_text,
@@ -187,7 +187,7 @@ async def bulk_create_iocs(request: IOCBulkRequest) -> dict[str, Any]:
             "confidence": ioc.confidence,
             "severity": ioc.severity,
             "tags": ioc.tags,
-            "mitre_techniques": ioc.mitre_techniques,
+            "related_mitre_techniques": ioc.related_mitre_techniques,
             "tlp": ioc.tlp,
             "context": ioc.context,
             "raw_text": ioc.raw_text,

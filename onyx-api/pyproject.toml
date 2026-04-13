@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "onyx-api"
-version = "3.0.0"
-description = "ONYX CTI Platform — FastAPI REST + GraphQL API Server"
+version = "3.1.0"
+description = "ONYX CTI Platform — FastAPI REST + GraphQL API Server with RAG-enabled AI Copilot"
 requires-python = ">=3.12"
 license = {text = "Proprietary"}
 
@@ -19,6 +19,11 @@ dependencies = [
     "python-multipart>=0.0.9",
     "httpx>=0.27,<1.0",
     "orjson>=3.10,<4.0",
+
+    # — AI / RAG Subsystem —
+    "google-genai>=1.0.0",
+    "qdrant-client>=1.12.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

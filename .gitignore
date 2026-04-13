@@ -10,3 +10,5 @@ error2.log
 build/
 dist/
 *.log
+
+error.txt
