@@ -65,7 +65,7 @@ export default function OnyxCopilot() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
+      const response = await fetch(`${API_BASE}/api/v1/agent/chat/stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -209,15 +209,13 @@ export default function OnyxCopilot() {
           id="onyx-copilot-window"
           style={{
             position: 'fixed',
-            bottom: 100,
-            right: 28,
-            width: 420,
-            height: 600,
-            zIndex: 10000,
-            borderRadius: 20,
+            bottom: 80,
+            right: 20,
+            width: 400,
+            height: 500,
+            zIndex: 9999,
+            borderRadius: 10,
             overflow: 'hidden',
-            display: 'flex',
-            flexDirection: 'column',
             background: '#0a0f1a',
             border: '1px solid rgba(0, 240, 255, 0.2)',
             boxShadow:
@@ -228,13 +226,18 @@ export default function OnyxCopilot() {
           {/* ── Header ──────────────────────────────────────────── */}
           <div
             style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: 56,
               padding: '16px 20px',
               background: 'linear-gradient(135deg, #0c1019 0%, #121828 100%)',
               borderBottom: '1px solid rgba(255,255,255,0.06)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              flexShrink: 0,
+              zIndex: 2,
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -305,7 +308,18 @@ export default function OnyxCopilot() {
           </div>
 
           {/* ── Chat Body ──────────────────────────────────── */}
-          <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{
+            position: 'absolute',
+            top: 56,
+            left: 0,
+            width: 400,
+            height: 372,
+            maxHeight: 372,
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            padding: 16,
+            wordBreak: 'break-word' as const,
+          }}>
             {messages.map((msg) => (
               <div key={msg.id}>
                 {msg.isGuardrailBlock ? (
@@ -387,7 +401,17 @@ export default function OnyxCopilot() {
           </div>
 
           {/* ── Input Area ─────────────────────────────────── */}
-          <div className="p-4 border-t border-[#1a2236] bg-[#0c1019]/90 shrink-0">
+          <div style={{
+            position: 'absolute',
+            bottom: 0,
+            left: 0,
+            width: 400,
+            height: 72,
+            padding: '12px 16px',
+            borderTop: '1px solid #1a2236',
+            background: 'rgba(12, 16, 25, 0.95)',
+            zIndex: 2,
+          }}>
             <CommandInput onSend={handleSendMessage} isLoading={isLoading} />
             <div className="flex justify-between items-center mt-2 px-1">
                <span className="text-[9px] font-mono text-[#5a6478]">RAG + Guardrails Active</span>

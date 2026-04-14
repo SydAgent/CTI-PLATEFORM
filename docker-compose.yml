@@ -152,12 +152,19 @@ services:
       dockerfile: ./onyx-api/Dockerfile
     container_name: onyx-api
     hostname: onyx-api
+    user: root
     env_file: .env
+    volumes:
+      - ./onyx-api:/app/onyx-api
+      - ./onyx-core:/app/onyx-core
+      - ./onyx-nlp:/app/onyx-nlp
     ports:
       - "8000:8000"
     networks:
       - onyx-data
       - onyx-app
+    command: >
+      sh -c "pip install google-genai qdrant-client strawberry-graphql && uvicorn onyx_api.main:app --host 0.0.0.0 --port 8000 --workers 4"
     depends_on:
       elasticsearch:
         condition: service_healthy
