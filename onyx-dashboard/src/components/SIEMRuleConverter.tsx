@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useEffect, useId, useMemo } from 'react';
-import { useThreatStream } from './DashboardClient';
+import { useOnyxStore } from '@/lib/store';
 
 export default function SIEMRuleConverter({ activeIoc }: { activeIoc?: string }) {
   const [engine, setEngine] = useState<'SIGMA' | 'YARA' | 'SNORT'>('SIGMA');
   const [ruleId, setRuleId] = useState('');
   const [ruleDate, setRuleDate] = useState('');
   const [rotatingIdx, setRotatingIdx] = useState(0);
-  const { armedIocs } = useThreatStream() || { armedIocs: [] };
+  const armedIocs = useOnyxStore(s => s.armedIocs) || [];
 
   // Extract live IOC values for rotation
   const liveIocValues = useMemo(() => {
@@ -72,7 +72,7 @@ tags:
         mitre_attack  = "T1041, T1095"
     strings:
         $ip_ascii    = "${target}" ascii wide nocase
-        $ip_hex      = { ${target.split('.').map(o => parseInt(o).toString(16).padStart(2,'0')).join(' ')} }
+        $ip_hex      = { ${target.split('.').map((o: string) => parseInt(o).toString(16).padStart(2,'0')).join(' ')} }
         $ua_bot      = "python-requests" ascii nocase
         $beacon_call = { 48 8B ?? E8 ?? ?? ?? ?? 48 85 C0 }
     condition:

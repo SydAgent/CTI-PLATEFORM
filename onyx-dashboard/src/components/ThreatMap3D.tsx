@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { useOnyxStore } from '@/lib/store';
 
 // Removed static WebGL imports to prevent maxTextureDimension2D SSR crash
 // Dependencies will be lazy-loaded in useEffect
@@ -16,20 +17,24 @@ const INITIAL_VIEW_STATE = {
 
 const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json';
 
-const MAJOR_CITIES = [
-  { lon: -74.0, lat: 40.7, name: 'United States', ip: '45.142.212.100' },
-  { lon: 37.6, lat: 55.75, name: 'Russian Federation', ip: '185.220.101.45' },
-  { lon: 116.4, lat: 39.9, name: 'China', ip: '114.114.114.114' },
-  { lon: -0.12, lat: 51.5, name: 'United Kingdom', ip: '91.108.56.181' },
-  { lon: 34.8, lat: 31.0, name: 'Israel', ip: '77.83.36.18' }
-];
+// ── SEVERITY → COLOR MAPPING ──
+const SEVERITY_COLORS: Record<string, [number, number, number]> = {
+  critical: [239, 68, 68],   // Red
+  high:     [249, 115, 22],  // Orange
+  medium:   [234, 179, 8],   // Yellow
+  low:      [34, 197, 94],   // Green
+};
 
 export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] }) {
+  // ── Zustand store subscription for live events ──
+  const storeEvents = useOnyxStore(s => s.events);
+  
   const [DeckGL, setDeckGL] = useState<any>(null);
   const [deckLayers, setDeckLayers] = useState<any>(null);
   const [MapGL, setMapGL] = useState<any>(null);
 
-  const [arcs, setArcs] = useState<any[]>([]);
+  const [verifiedArcs, setVerifiedArcs] = useState<any[]>([]);
+  const [threatSources, setThreatSources] = useState<any[]>([]);
   const [geoData, setGeoData] = useState(null);
   const [hoverInfo, setHoverInfo] = useState<any>(null);
   const [isWebGLSupported, setIsWebGLSupported] = useState<boolean | null>(null);
@@ -38,6 +43,13 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
   const [pulseSync, setPulseSync] = useState(false);
   const [geoArticles, setGeoArticles] = useState<any[]>([]);
   const [geoMarkers, setGeoMarkers] = useState<any[]>([]);
+  const [pulsePhase, setPulsePhase] = useState(0);
+
+  // Animate scatter pulse
+  useEffect(() => {
+    const t = setInterval(() => setPulsePhase(p => (p + 1) % 120), 50);
+    return () => clearInterval(t);
+  }, []);
 
   // Poll geopolitical threats from backend every 30s
   useEffect(() => {
@@ -58,14 +70,6 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
     const interval = setInterval(fetchGeo, 30_000);
     return () => clearInterval(interval);
   }, []);
-
-  useEffect(() => {
-    if (liveEvents && liveEvents.length > 0) {
-      setLastSync(Date.now());
-      setPulseSync(true);
-      setTimeout(() => setPulseSync(false), 800);
-    }
-  }, [liveEvents]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -103,52 +107,107 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
       .catch(console.error);
   }, []);
 
-  // Real-time Mapping of Incoming Events
+  // ── Real-time Mapping of Incoming Events ──
+  // REFACTORED: No more fake Paris targeting. 
+  // Events with source+target geo → ArcLayer (verified bidirectional)
+  // Events with source-only geo → ScatterplotLayer (threat pulse)
   useEffect(() => {
-    if (!liveEvents || liveEvents.length === 0) return;
+    const allEvents = [
+      ...(liveEvents || []),
+      ...storeEvents,
+    ];
 
-    const deterministicGeoHash = (str: string) => {
-      let hash = 0;
-      for (let i = 0; i < str.length; i++) {
-        hash = ((hash << 5) - hash) + str.charCodeAt(i);
-        hash |= 0; 
+    if (allEvents.length === 0) return;
+
+    // Filter events that have at least source geolocation
+    const geoEvents = allEvents
+      .filter((ev: any) => {
+        const evType = ev.event_type || ev.type;
+        const hasGeo = ev.data?.geolocation || ev.geolocation;
+        return evType === 'ioc_detected' && hasGeo;
+      })
+      .slice(-100);
+
+    if (geoEvents.length === 0) return;
+
+    const newArcs: any[] = [];
+    const newSources: any[] = [];
+
+    geoEvents.forEach((ev) => {
+      const srcGeo = ev.data?.geolocation || ev.geolocation;
+      const tgtGeo = ev.data?.target_geolocation || ev.target_geolocation;
+
+      if (srcGeo && tgtGeo && tgtGeo.longitude && tgtGeo.latitude) {
+        // ── VERIFIED BIDIRECTIONAL ARC ──
+        // Both source and target geolocation are present in the event data
+        newArcs.push({
+          source: [srcGeo.longitude, srcGeo.latitude],
+          target: [tgtGeo.longitude, tgtGeo.latitude],
+          srcName: `${srcGeo.country || 'Unknown'} (${srcGeo.city || 'Unknown'})`,
+          dstName: `${tgtGeo.country || 'Unknown'} (${tgtGeo.city || 'Unknown'})`,
+          srcIp: ev.data?.value || ev.value || 'N/A',
+          timestamp: new Date(ev.timestamp || Date.now()).getTime(),
+          color: (ev.data?.confidence ?? 50) > 90 ? [255, 60, 92] : [255, 165, 0],
+        });
+      } else if (srcGeo) {
+        // ── SOURCE-ONLY THREAT PULSE ──
+        // Only source geolocation known — render as scatter pulse, never fabricate a target
+        const severity = ev.data?.severity || ev.severity || 'high';
+        newSources.push({
+          position: [srcGeo.longitude, srcGeo.latitude],
+          name: `${srcGeo.country || 'Unknown'} (${srcGeo.city || 'Unknown'})`,
+          ip: ev.data?.value || ev.value || 'N/A',
+          severity: severity,
+          confidence: ev.data?.confidence ?? 50,
+          source: ev.data?.source || ev.source || 'OSINT',
+          timestamp: new Date(ev.timestamp || Date.now()).getTime(),
+          color: SEVERITY_COLORS[severity] || SEVERITY_COLORS.high,
+        });
       }
-      return Math.abs(hash);
-    };
-
-    // For the demo, target is the primary operations center (US)
-    const TARGET = MAJOR_CITIES[0];
-
-    const newArcs = liveEvents.slice(-30).map((ev, i) => {
-      const val = ev.data?.value || `10.0.0.${i}`;
-      const hash = deterministicGeoHash(val);
-      
-      // Deterministically select source from known threat geographies based on the IOC value
-      const srcIdx = (hash % (MAJOR_CITIES.length - 1)) + 1;
-      const src = MAJOR_CITIES[srcIdx];
-
-      return {
-        source: [src.lon, src.lat],
-        target: [TARGET.lon, TARGET.lat],
-        srcName: src.name,
-        dstName: TARGET.name,
-        srcIp: val,
-        timestamp: new Date(ev.timestamp).getTime(),
-        color: ev.data?.confidence && ev.data.confidence > 95 ? [255, 60, 92] : [255, 165, 0]
-      };
     });
 
-    setArcs(newArcs);
-  }, [liveEvents]);
+    // Also add backend geopolitical markers as threat sources
+    geoMarkers.forEach((m: any) => {
+      if (m.lat && m.lon) {
+        newSources.push({
+          position: [m.lon, m.lat],
+          name: m.country || 'Unknown',
+          ip: `${m.count || 0} indicators`,
+          severity: 'high',
+          confidence: 80,
+          source: 'Geopolitical Intel',
+          timestamp: Date.now(),
+          color: SEVERITY_COLORS.high,
+          count: m.count || 1,
+        });
+      }
+    });
+
+    setVerifiedArcs(newArcs);
+    setThreatSources(newSources);
+
+    setLastSync(Date.now());
+    setPulseSync(true);
+    setTimeout(() => setPulseSync(false), 800);
+  }, [liveEvents, storeEvents, geoMarkers]);
 
   const activeCountries = useMemo(() => {
     const set = new Set<string>();
-    arcs.forEach(a => {
+    verifiedArcs.forEach(a => {
       set.add(a.srcName);
       set.add(a.dstName);
     });
+    threatSources.forEach(s => {
+      set.add(s.name);
+    });
     return set;
-  }, [arcs]);
+  }, [verifiedArcs, threatSources]);
+
+  // Animated pulse radius
+  const pulseRadius = useMemo(() => {
+    const phase = pulsePhase / 120;
+    return 20000 + Math.sin(phase * Math.PI * 2) * 15000;
+  }, [pulsePhase]);
 
   const layersList = useMemo(() => {
     if (!deckLayers) return [];
@@ -167,7 +226,7 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
         getFillColor: (d: any) => {
           const countryName = d.properties.admin || d.properties.name;
           if (activeCountries.has(countryName)) {
-            return [239, 68, 68, 80]; // Pulsing red for active zones
+            return [239, 68, 68, 80]; // Red for active zones
           }
           return [0, 0, 0, 0];
         },
@@ -176,35 +235,53 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
         }
       }),
       
-      // 2. Nodes (Impact / Source zones)
+      // 2. Threat Source Pulse Layer — massive pulsing nodes on malicious origins
       new ScatterplotLayer({
-        id: 'nodes-layer',
-        data: MAJOR_CITIES,
-        getPosition: (d: any) => [d.lon, d.lat],
-        getFillColor: [0, 238, 255, 200],
-        getRadius: 100000,
-        radiusScale: 2,
+        id: 'threat-source-pulse-outer',
+        data: threatSources,
+        getPosition: (d: any) => d.position,
+        getFillColor: (d: any) => [...d.color, 40],
+        getRadius: (d: any) => (d.count || 1) * pulseRadius,
+        radiusMinPixels: 8,
+        radiusMaxPixels: 60,
+        stroked: true,
+        getLineColor: (d: any) => [...d.color, 80],
+        lineWidthMinPixels: 1,
+        pickable: true,
+        onHover: (info: any) => setHoverInfo(info.object ? { ...info, layerType: 'source' } : null),
+        updateTriggers: {
+          getRadius: pulsePhase,
+        }
+      }),
+
+      // 3. Threat Source Core — solid inner node
+      new ScatterplotLayer({
+        id: 'threat-source-core',
+        data: threatSources,
+        getPosition: (d: any) => d.position,
+        getFillColor: (d: any) => [...d.color, 220],
+        getRadius: 15000,
         radiusMinPixels: 4,
         radiusMaxPixels: 12,
         stroked: true,
-        getLineColor: [0, 238, 255],
-        lineWidthMinPixels: 2
+        getLineColor: (d: any) => [...d.color, 255],
+        lineWidthMinPixels: 2,
       }),
 
-      // 3. Attack Vectors
+      // 4. Verified Attack Arcs — ONLY when both source AND target are confirmed
       new ArcLayer({
-        id: 'attack-arcs',
-        data: arcs,
+        id: 'verified-attack-arcs',
+        data: verifiedArcs,
         getSourcePosition: (d: any) => d.source,
         getTargetPosition: (d: any) => d.target,
         getSourceColor: (d: any) => [...d.color, 255],
-        getTargetColor: (d: any) => [0, 238, 255, 255],
+        getTargetColor: [0, 238, 255, 255],
         getWidth: 3,
         pickable: true,
-        onHover: (info: any) => setHoverInfo(info)
+        onHover: (info: any) => setHoverInfo(info.object ? { ...info, layerType: 'arc' } : null),
       })
     ];
-  }, [arcs, activeCountries, geoData, deckLayers, setHoverInfo]);
+  }, [verifiedArcs, threatSources, activeCountries, geoData, deckLayers, pulsePhase, pulseRadius]);
 
   if (isWebGLSupported === false) {
     return (
@@ -212,13 +289,6 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
         <div style={{ fontSize: 28, marginBottom: 12 }}>⚠️</div>
         <div style={{ color: '#ef4444', fontFamily: 'monospace', fontSize: '12px', fontWeight: 'bold' }}>WEBGL HARDWARE ACCELERATION DISABLED</div>
         <div style={{ color: '#6b7280', fontFamily: 'monospace', fontSize: '10px', marginTop: 4 }}>[ FALLBACK: SECURE 2D MODE ACTIVE ]</div>
-        <div style={{ marginTop: 20, display: 'flex', gap: 10 }}>
-          {MAJOR_CITIES.map(c => (
-            <div key={c.name} style={{ background: '#111', padding: '4px 8px', borderRadius: 4, fontSize: 9, color: '#00eeff', border: '1px solid #1f2937' }}>
-              {c.name} · {c.ip}
-            </div>
-          ))}
-        </div>
       </div>
     );
   }
@@ -239,7 +309,7 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
           <span className="font-bold">GEOPOLITICAL THREAT MATRIX</span>
         </div>
         <div style={{ color: pulseSync ? '#ff3b5c' : '#6b7280', fontSize: '9px', fontWeight: 'bold' }}>
-          Dernière synchronisation : il y a {syncStr} secondes
+          LIVE · {threatSources.length} threat sources · {verifiedArcs.length} verified arcs · synced {syncStr}s ago
         </div>
       </div>
 
@@ -255,6 +325,7 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
         />
       </DeckGL>
 
+      {/* Hover Tooltip — contextual for both arcs and threat sources */}
       {hoverInfo && hoverInfo.object && (
         <div style={{
           position: 'absolute',
@@ -272,20 +343,47 @@ export default function ThreatMap3D({ liveEvents = [] }: { liveEvents?: any[] })
           transform: 'translate(-50%, -120%)',
           boxShadow: '0 0 15px rgba(239, 68, 68, 0.2)'
         }}>
-          <div style={{ marginBottom: 4 }}>
-            <span style={{ color: '#ef4444', fontWeight: 'bold' }}>Source: </span>
-            {hoverInfo.object.srcName} ({hoverInfo.object.srcIp})
-          </div>
-          <div>
-            <span style={{ color: '#00eeff', fontWeight: 'bold' }}>Target: </span>
-            {hoverInfo.object.dstName}
-          </div>
+          {hoverInfo.layerType === 'arc' ? (
+            <>
+              <div style={{ marginBottom: 4 }}>
+                <span style={{ color: '#ef4444', fontWeight: 'bold' }}>Source: </span>
+                {hoverInfo.object.srcName} ({hoverInfo.object.srcIp})
+              </div>
+              <div>
+                <span style={{ color: '#00eeff', fontWeight: 'bold' }}>Target: </span>
+                {hoverInfo.object.dstName}
+              </div>
+              <div style={{ marginTop: 4, color: '#22c55e', fontSize: '9px' }}>
+                ✓ VERIFIED BIDIRECTIONAL VECTOR
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ marginBottom: 4 }}>
+                <span style={{ color: '#ef4444', fontWeight: 'bold' }}>Threat Origin: </span>
+                {hoverInfo.object.name}
+              </div>
+              <div>
+                <span style={{ color: '#f59e0b', fontWeight: 'bold' }}>IOC: </span>
+                {hoverInfo.object.ip}
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', gap: 8 }}>
+                <span style={{ color: '#6b7280', fontSize: '9px' }}>Source: {hoverInfo.object.source}</span>
+                <span style={{ color: '#6b7280', fontSize: '9px' }}>Confidence: {hoverInfo.object.confidence}%</span>
+              </div>
+            </>
+          )}
         </div>
       )}
 
-      {/* Geopolitical Marker Count Badge */}
-      <div style={{ position: 'absolute', top: 12, right: 16, zIndex: 10, fontFamily: 'monospace', fontSize: '10px', color: '#00eeff', background: 'rgba(5,10,15,0.9)', padding: '4px 10px', borderRadius: '4px', border: '1px solid rgba(0,238,255,0.3)' }}>
-        {geoMarkers.length} active regions · {geoArticles.length} intel articles
+      {/* Legend Badge */}
+      <div style={{ position: 'absolute', top: 12, right: 16, zIndex: 10, fontFamily: 'monospace', fontSize: '10px', color: '#00eeff', background: 'rgba(5,10,15,0.9)', padding: '6px 10px', borderRadius: '4px', border: '1px solid rgba(0,238,255,0.3)', display: 'flex', flexDirection: 'column', gap: 3 }}>
+        <div>{verifiedArcs.length} verified arcs · {threatSources.length} threat sources · {geoArticles.length} intel</div>
+        <div style={{ display: 'flex', gap: 8, fontSize: '8px' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} /> Critical</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f97316', display: 'inline-block' }} /> High</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: '#eab308', display: 'inline-block' }} /> Medium</span>
+        </div>
       </div>
 
       {/* Live Geopolitical Intelligence Ticker */}

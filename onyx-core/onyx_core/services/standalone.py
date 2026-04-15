@@ -219,13 +219,44 @@ class MockMongoDBService:
             }
         return None
 
+class MockRedisClient:
+    """
+    In-memory mock of the redis.asyncio.Redis client interface.
+    Satisfies @redis_cache_decorator and MitreConnector.preload_cache()
+    which access redis.client.setex(), .get(), .exists().
+    """
+
+    async def setex(self, key: str, ttl: int, value: str) -> None:
+        GLOBAL_CACHE[key] = value
+
+    async def get(self, key: str) -> str | None:
+        return GLOBAL_CACHE.get(key)
+
+    async def exists(self, key: str) -> int:
+        return 1 if key in GLOBAL_CACHE else 0
+
+    async def set(self, key: str, value: str, **kwargs: Any) -> None:
+        GLOBAL_CACHE[key] = value
+
+    async def delete(self, key: str) -> None:
+        GLOBAL_CACHE.pop(key, None)
+
+
 class MockRedisService:
     _instance: MockRedisService | None = None
+    _mock_client: MockRedisClient | None = None
 
     def __new__(cls) -> MockRedisService:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._mock_client = MockRedisClient()
         return cls._instance
+
+    @property
+    def client(self) -> MockRedisClient:
+        """Expose a mock Redis client for @redis_cache_decorator compatibility."""
+        assert self._mock_client is not None
+        return self._mock_client
 
     async def initialize(self) -> None:
         logger.info("[MockRedis] Initialized in Standalone mode.")
@@ -261,4 +292,38 @@ class MockRedisService:
             
     async def publish_ws(self, channel: str, message: dict[str, Any]) -> None:
         pass
+
+    async def ws_publish(
+        self,
+        channel_name: str,
+        payload: dict[str, Any],
+        broadcast_channel: str = "onyx:ws:broadcast",
+    ) -> None:
+        """
+        Standalone mode ws_publish: bypasses Redis Pub/Sub entirely.
+        Broadcasts directly to connected WebSocket clients via the
+        in-process WSConnectionManager.
+        """
+        import asyncio
+        from datetime import datetime, timezone as tz
+        frame = {
+            "channel": channel_name,
+            "payload": payload,
+            "ts": datetime.now(tz.utc).isoformat(),
+        }
+        try:
+            from onyx_api.routers.websocket_hub import ws_manager
+            asyncio.create_task(ws_manager.broadcast(frame))
+        except Exception:
+            pass  # Silently degrade if hub not yet initialized
+
+    async def ws_subscribe(
+        self,
+        broadcast_channel: str = "onyx:ws:broadcast",
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Standalone mode: infinite async generator that never yields (no Redis)."""
+        import asyncio
+        while True:
+            await asyncio.sleep(3600)
+            yield {}
 

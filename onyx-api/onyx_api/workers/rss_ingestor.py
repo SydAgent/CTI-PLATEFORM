@@ -8,7 +8,7 @@ in real-time via the REDIS/Standalone SSE stream.
 import asyncio
 import html
 import json
-import random
+import hashlib
 import re
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
@@ -45,10 +45,12 @@ def _process_text_with_nlp(text: str) -> dict:
             val = match.group(0)
             if val.lower() not in seen:
                 seen.add(val.lower())
+                # Deterministic confidence jitter based on val hash
+                jitter = (int(hashlib.md5(val.encode()).hexdigest()[:4], 16) % 50) / 1000
                 entities.append({
                     "label": label,
                     "text": val,
-                    "conf": round(base_conf - random.uniform(0.01, 0.05), 3)
+                    "conf": round(base_conf - jitter, 3)
                 })
                 
     # 2. Contextual NLP heuristics simulation (SciBERT-like)
@@ -63,10 +65,12 @@ def _process_text_with_nlp(text: str) -> dict:
     for kw, (label, val) in context_keywords.items():
         if kw in lower_text and val.lower() not in seen:
             seen.add(val.lower())
+            # Deterministic confidence from hash
+            jitter = (int(hashlib.md5(val.encode()).hexdigest()[:4], 16) % 100) / 1000
             entities.append({
                 "label": label,
                 "text": val,
-                "conf": round(0.85 + random.uniform(0.01, 0.1), 3)
+                "conf": round(0.90 + jitter, 3)
             })
 
     # Optional STIX output generation logic could go here
@@ -142,7 +146,7 @@ async def start_autonomous_ingestor(app_state, sse_broadcast_callback):
                 for ext in new_extractions:
                     await sse_broadcast_callback(ext)
                     # Pace the live stream for visual effect on the dashboard
-                    await asyncio.sleep(random.uniform(2.0, 5.0))
+                    await asyncio.sleep(3.0)
             
             # Poll every 5 minutes in production, but here we loop quickly for demo
             # If seen_articles is full, it won't broadcast anyway.

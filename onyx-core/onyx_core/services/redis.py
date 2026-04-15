@@ -339,3 +339,64 @@ class RedisService:
         finally:
             await pubsub.unsubscribe(channel)
             await pubsub.close()
+
+    # ------------------------------------------------------------------
+    # WebSocket Event Bus (v4.0-APEX)
+    # ------------------------------------------------------------------
+
+    async def ws_publish(
+        self,
+        channel_name: str,
+        payload: dict[str, Any],
+        broadcast_channel: str = "onyx:ws:broadcast",
+    ) -> None:
+        """
+        Publish a WebSocket event to the Redis broadcast channel.
+
+        This is the primary method for injecting events into the
+        WebSocket Event Bus. All connected WS clients (across all
+        API worker processes) will receive the message via Pub/Sub.
+
+        Args:
+            channel_name: Event channel (e.g., 'ioc_detected', 'nlp_extraction')
+            payload: Event data dict.
+            broadcast_channel: Redis Pub/Sub channel name.
+        """
+        frame = {
+            "channel": channel_name,
+            "payload": payload,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            await self.events.publish(broadcast_channel, json.dumps(frame))
+        except Exception:
+            # Standalone Mode fallback: broadcast via local process manager if Redis is offline
+            from onyx_api.routers.websocket_hub import ws_manager
+            import asyncio
+            asyncio.create_task(ws_manager.broadcast(frame))
+
+    async def ws_subscribe(
+        self,
+        broadcast_channel: str = "onyx:ws:broadcast",
+    ) -> AsyncIterator[dict[str, Any]]:
+        """
+        Subscribe to the WebSocket broadcast channel.
+
+        Yields parsed message dicts as they arrive. Used by the
+        WebSocket Hub to fan-out events to connected clients.
+
+        Auto-reconnects on subscription failure (caller should
+        wrap in a retry loop).
+        """
+        pubsub = self.events.pubsub()
+        await pubsub.subscribe(broadcast_channel)
+        try:
+            async for message in pubsub.listen():
+                if message["type"] == "message":
+                    try:
+                        yield json.loads(message["data"])
+                    except json.JSONDecodeError:
+                        logger.warning("ws.malformed_message", extra={"raw": str(message["data"])[:200]})
+        finally:
+            await pubsub.unsubscribe(broadcast_channel)
+            await pubsub.close()

@@ -6,7 +6,7 @@ Deterministic parsing for RSS Feeds -> Strategic JSON Reports.
 
 import asyncio
 import html
-import random
+import hashlib
 import re
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
@@ -131,7 +131,7 @@ def extract_structured_intelligence(title: str, text: str) -> dict:
     }
 
     return {
-        "id": f"RPT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{random.randint(1000, 9999)}",
+        "id": f"RPT-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{hashlib.md5(title.encode()).hexdigest()[:4].upper()}",
         "title": title,
         "executive_summary": exec_summary,
         "threat_overview": threat_overview,

@@ -14,6 +14,7 @@ interface ChatMessage {
   isStreaming?: boolean;
   isGuardrailBlock?: boolean;
   isQuotaBlock?: boolean;
+  tags?: string[];
 }
 
 export default function ChatPage() {

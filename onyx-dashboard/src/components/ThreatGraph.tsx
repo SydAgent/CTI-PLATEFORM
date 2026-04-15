@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useMemo, useCallback, memo } from 'react';
 import * as d3 from 'd3-force';
-import { useThreatStream } from './DashboardClient';
+import { useOnyxStore } from '@/lib/store';
 
 /*
  * ONYX CTI — Advanced Threat Graph Visualization Engine
@@ -190,9 +190,8 @@ export default function ThreatGraph() {
   const [ForceGraph, setForceGraph] = useState<any>(null);
   const [isWebGLSupported, setIsWebGLSupported] = useState<boolean | null>(null);
   const [stixData, setStixData] = useState<GraphData>({ nodes: [], links: [] });
-  const threatStream = useThreatStream();
-  const armedIocs = threatStream?.armedIocs || EMPTY_IOCS;
-  const setSelectedEventId = threatStream?.setSelectedEventId;
+  const armedIocs = useOnyxStore(s => s.armedIocs) || EMPTY_IOCS;
+  const setSelectedEventId = useOnyxStore(s => s.setSelectedEventId);
 
   // ── WebGL Detection ────────────────────────────────────────────────────
   useEffect(() => {
@@ -249,7 +248,7 @@ export default function ThreatGraph() {
     }
 
     const sourceNodeIds: Record<string, string> = {};
-    for (const src of sourceMap.keys()) {
+    for (const src of Array.from(sourceMap.keys())) {
       const srcId = `source--${src.replace(/\s+/g, '-').toLowerCase()}`;
       if (!existingIds.has(srcId) && nodes.length < NODE_CAP) {
         const cfg = NODE_TAXONOMY['source-cluster'];

@@ -1,7 +1,9 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useCallback, createContext, useContext } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import ThreatActorIntel from './ThreatActorIntel';
+import ReportGenerator from './ReportGenerator';
 import jsPDF from 'jspdf';
 import Papa from 'papaparse';
 import AttackMatrix from '@/components/AttackMatrix';
@@ -35,20 +37,7 @@ const ThreatGraph = dynamic(() => import('@/components/ThreatGraph'), {
 /* ============================================================================
    Types
    ============================================================================ */
-interface DashboardStats {
-  iocs: { total_iocs?: { value: number }; by_type?: { buckets: Array<{ key: string; doc_count: number }> }; by_severity?: { buckets: Array<{ key: string; doc_count: number }> }; timeline_24h?: { buckets: Array<{ key_as_string: string; doc_count: number }> }; avg_confidence?: { value: number } };
-  threats: { total_threats?: { value: number }; by_type?: { buckets: Array<{ key: string; doc_count: number }> } };
-  stix: { types: Record<string, number>; total: number };
-  crawlers: Array<{ crawler_id: string; status: string; last_run?: string }>;
-}
-
-interface IOC { type: string; value: string; source: string; confidence: number; }
-
-interface SSEEvent {
-  type: string;
-  data: Record<string, unknown>;
-  timestamp: string;
-}
+import { useOnyxStore, type IOC, type WSEvent as SSEEvent } from '@/lib/store';
 
 /* ============================================================================
    API
@@ -61,102 +50,6 @@ async function apiFetch<T>(path: string): Promise<T | null> {
     if (!res.ok) return null;
     return res.json();
   } catch { return null; }
-}
-
-/* ============================================================================
-   Threat Stream Provider (Global Context)
-   ============================================================================ */
-export const ThreatStreamContext = createContext<any>(null);
-export const useThreatStream = () => useContext(ThreatStreamContext);
-
-export function ThreatStreamProvider({ children }: { children: React.ReactNode }) {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [armedIocs, setArmedIocs] = useState<IOC[]>([]);
-  const [events, setEvents] = useState<SSEEvent[]>([]);
-  const [connected, setConnected] = useState(false);
-  const [liveIocCount, setLiveIocCount] = useState(0);
-  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
-
-  const loadStats = useCallback(async () => {
-    const data = await apiFetch<DashboardStats>('/api/v1/dashboard/stats');
-    if (data) setStats(data);
-    const iocData = await apiFetch<{ total: number; iocs: IOC[] }>('/api/v1/iocs/armed');
-    if (iocData?.iocs) setArmedIocs(iocData.iocs);
-  }, []);
-
-  useEffect(() => {
-    loadStats();
-    const interval = setInterval(loadStats, 15_000);
-    return () => clearInterval(interval);
-  }, [loadStats]);
-
-  useEffect(() => {
-    const url = `${API}/api/v1/dashboard/events/stream`;
-    let es: EventSource | null = null;
-    let reconnectDelay = 1000;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-    let graceTimer: ReturnType<typeof setTimeout>;
-
-    const resetGraceTimer = () => {
-      clearTimeout(graceTimer);
-      setConnected(true);
-      graceTimer = setTimeout(() => setConnected(false), 8000);
-    };
-
-    const connect = () => {
-      try { es?.close(); } catch {}
-      try {
-        es = new EventSource(url);
-        es.onopen = () => { resetGraceTimer(); reconnectDelay = 1000; };
-
-        const handleEvent = (e: MessageEvent) => {
-          resetGraceTimer();
-          try {
-            const data = JSON.parse(e.data);
-            const evType = (e as any).type || 'message';
-            if (evType === 'ioc_detected') {
-              setLiveIocCount(c => c + 1);
-              // UNIFIED STATE: instantly append SSE IOCs so IOC Explorer sees it
-              setArmedIocs(prev => [data, ...prev]);
-            }
-            setEvents(prev => [
-              { type: evType, data, timestamp: new Date().toISOString() },
-              ...prev.slice(0, 149)
-            ]);
-          } catch {}
-        };
-
-        es.addEventListener('heartbeat', handleEvent as EventListener);
-        es.addEventListener('ioc_detected', handleEvent as EventListener);
-        es.addEventListener('nlp_extraction', handleEvent as EventListener);
-        es.onmessage = handleEvent;
-
-        es.onerror = () => {
-          es?.close();
-          clearTimeout(reconnectTimer);
-          reconnectTimer = setTimeout(() => {
-            reconnectDelay = Math.min(reconnectDelay * 2, 8000);
-            connect();
-          }, reconnectDelay);
-        };
-      } catch {
-        reconnectTimer = setTimeout(connect, 3000);
-      }
-    };
-
-    connect();
-    return () => {
-      clearTimeout(reconnectTimer);
-      clearTimeout(graceTimer);
-      es?.close();
-    };
-  }, []);
-
-  return (
-    <ThreatStreamContext.Provider value={{ stats, armedIocs, events, connected, liveIocCount, selectedEventId, setSelectedEventId }}>
-      {children}
-    </ThreatStreamContext.Provider>
-  );
 }
 
 /* ============================================================================
@@ -278,16 +171,44 @@ function SeverityBar({ severity, count, total }: { severity: string; count: numb
 }
 
 function LiveFeed({ events }: { events: SSEEvent[] }) {
-  const { selectedEventId, setSelectedEventId } = useThreatStream();
+  const selectedEventId = useOnyxStore(s => s.selectedEventId);
+  const setSelectedEventId = useOnyxStore(s => s.setSelectedEventId);
+  const isFeedPaused = useOnyxStore(s => s.isFeedPaused);
+  const feedBuffer = useOnyxStore(s => s.feedBuffer);
+  const pauseFeed = useOnyxStore(s => s.pauseFeed);
+  const resumeFeed = useOnyxStore(s => s.resumeFeed);
   return (
     <div className="onyx-card animate-in" style={{ height: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-md)' }}>
         <h3 style={{ fontSize: 'var(--font-size-base)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
-          <span className="pulse-live" /> Live Event Feed
+          <span className="pulse-live" style={isFeedPaused ? { background: 'var(--onyx-amber)', animationPlayState: 'paused' } : undefined} /> Live Event Feed
         </h3>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{events.length} events</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+          {isFeedPaused && feedBuffer.length > 0 && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', padding: '2px 8px', borderRadius: 'var(--radius-full)', background: 'rgba(234,179,8,0.15)', color: '#eab308', fontWeight: 700, letterSpacing: '0.5px' }}>
+              ⏸ PAUSED · {feedBuffer.length} queued
+            </span>
+          )}
+          <button
+            id="live-feed-pause-toggle"
+            onClick={() => isFeedPaused ? resumeFeed() : pauseFeed()}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 12px', borderRadius: 'var(--radius-sm)',
+              background: isFeedPaused ? 'rgba(34,197,94,0.12)' : 'rgba(239,68,68,0.12)',
+              color: isFeedPaused ? '#22c55e' : '#ef4444',
+              border: `1px solid ${isFeedPaused ? 'rgba(34,197,94,0.3)' : 'rgba(239,68,68,0.3)'}`,
+              cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '10px',
+              fontWeight: 700, letterSpacing: '0.5px', textTransform: 'uppercase' as const,
+              transition: 'all 0.2s',
+            }}
+          >
+            {isFeedPaused ? '▶ RESUME' : '⏸ PAUSE'}
+          </button>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)' }}>{events.length} events</span>
+        </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)', maxHeight: 320, overflowY: 'auto' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)', maxHeight: 320, overflowY: 'auto', opacity: isFeedPaused ? 0.5 : 1, transition: 'opacity 0.3s' }}>
         {events.length === 0 && <div style={{ textAlign: 'center', padding: 'var(--space-xl)', color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>Awaiting live telemetry...</div>}
         {events.map((ev, i) => {
           const evValue = String(ev.data?.value || '');
@@ -312,7 +233,8 @@ function LiveFeed({ events }: { events: SSEEvent[] }) {
 function IOCExplorer({ iocs }: { iocs: IOC[] }) {
   const [filter, setFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const { selectedEventId, setSelectedEventId } = useThreatStream();
+  const selectedEventId = useOnyxStore(s => s.selectedEventId);
+  const setSelectedEventId = useOnyxStore(s => s.setSelectedEventId);
   const data = iocs;
   const isLoading = data.length === 0;
   const filtered = data.filter(ioc => {
@@ -766,7 +688,32 @@ function ReportsPanel({ onNavigate }: { onNavigate: (tab: string) => void }) {
    ============================================================================ */
 function DashboardContent() {
   const [activeTab, setActiveTab] = useState('overview');
-  const { stats, armedIocs, events, connected, liveIocCount } = useThreatStream();
+  const stats = useOnyxStore(s => s.stats);
+  const armedIocs = useOnyxStore(s => s.armedIocs);
+  const events = useOnyxStore(s => s.events);
+  const connected = useOnyxStore(s => s.connected);
+  const liveIocCount = useOnyxStore(s => s.liveIocCount);
+  const connectWebSocket = useOnyxStore(s => s.connectWebSocket);
+  const disconnectWebSocket = useOnyxStore(s => s.disconnectWebSocket);
+  const setStats = useOnyxStore(s => s.setStats);
+  const setArmedIocs = useOnyxStore(s => s.setArmedIocs);
+
+  useEffect(() => {
+    connectWebSocket();
+    return () => disconnectWebSocket();
+  }, [connectWebSocket, disconnectWebSocket]);
+
+  useEffect(() => {
+    async function loadStats() {
+      const data = await apiFetch<any>('/api/v1/dashboard/stats');
+      if (data) setStats(data);
+      const iocData = await apiFetch<any>('/api/v1/iocs/armed');
+      if (iocData?.iocs) setArmedIocs(iocData.iocs);
+    }
+    loadStats();
+    const id = setInterval(loadStats, 15000);
+    return () => clearInterval(id);
+  }, [setStats, setArmedIocs]);
   
   // ── Live-updated KPIs ────────────────────────────────────────────────────
   // Base from API, enriched with SSE live counter
@@ -857,7 +804,7 @@ function DashboardContent() {
             <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 20, background: 'linear-gradient(135deg, #ef4444, #f97316)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
               ☠ Threat Actor Intelligence
             </h2>
-            <ThreatActorsPanel onNavigate={setActiveTab} />
+            <ThreatActorIntel />
           </div>
         )}
 
@@ -890,7 +837,7 @@ function DashboardContent() {
             <h2 style={{ fontSize: 22, fontWeight: 800, marginBottom: 20, background: 'linear-gradient(135deg, #22c55e, #00eeff)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
               🕸 Crawler Operations Center
             </h2>
-            <CrawlersPanel crawlers={stats?.crawlers as any} />
+            <CrawlersPanel />
           </div>
         )}
 
@@ -900,9 +847,9 @@ function DashboardContent() {
               <h2 style={{ fontSize: 22, fontWeight: 800, background: 'linear-gradient(135deg, #a855f7, var(--onyx-cyan))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 📋 Threat Intelligence Reports
               </h2>
-              <button style={{ padding: '8px 18px', background: 'rgba(168,85,247,0.1)', border: '1px solid rgba(168,85,247,0.4)', borderRadius: 8, color: '#a855f7', fontSize: 12, cursor: 'pointer', fontWeight: 700 }}>
-                + New Report
-              </button>
+            </div>
+            <div className="mb-8">
+               <ReportGenerator />
             </div>
             <ReportsPanel onNavigate={setActiveTab} />
           </div>
@@ -915,9 +862,5 @@ function DashboardContent() {
 }
 
 export default function DashboardClient() {
-  return (
-    <ThreatStreamProvider>
-      <DashboardContent />
-    </ThreatStreamProvider>
-  );
+  return <DashboardContent />;
 }
