@@ -164,6 +164,14 @@ class GuardrailsConfig(BaseSettings):
     max_input_length: int = Field(default=4000)
     max_output_length: int = Field(default=16000)
 
+class OSINTConfig(BaseSettings):
+    """OSINT integrations configuration (AlienVault, MITRE, etc)."""
+
+    model_config = SettingsConfigDict(env_prefix="OSINT_", env_file=_ENV_PATH, extra="ignore")
+
+    alienvault_otx_key: str = Field(default="", description="AlienVault OTX API key")
+    mitre_taxii_url: str = Field(default="https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json")
+
 
 class OnyxConfig(BaseSettings):
     """Root configuration aggregating all sub-configs."""
@@ -229,6 +237,10 @@ class OnyxConfig(BaseSettings):
     @property
     def guardrails(self) -> GuardrailsConfig:
         return GuardrailsConfig()
+
+    @property
+    def osint(self) -> OSINTConfig:
+        return OSINTConfig()
 
 
 # Singleton instance

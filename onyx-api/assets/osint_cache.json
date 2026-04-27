@@ -1,0 +1,130 @@
+{
+  "iocs": [
+    {"type": "ipv4", "value": "185.220.101.45", "source": "MISP Warninglist", "confidence": 98, "severity": "critical", "tags": ["tor-exit", "c2"], "description": "Known Tor exit node associated with APT29 C2 infrastructure"},
+    {"type": "ipv4", "value": "91.108.56.181", "source": "abuse.ch Feodo Tracker", "confidence": 97, "severity": "critical", "tags": ["feodo", "c2", "qbot"], "description": "QBot C2 server — Feodo Tracker"},
+    {"type": "ipv4", "value": "194.165.16.78", "source": "abuse.ch Feodo Tracker", "confidence": 99, "severity": "critical", "tags": ["feodo", "c2", "emotet"], "description": "Emotet epoch 4 C2 node"},
+    {"type": "ipv4", "value": "45.142.212.100", "source": "MISP Warninglist", "confidence": 96, "severity": "high", "tags": ["bruteforce", "rdp"], "description": "Persistent RDP brute-force source"},
+    {"type": "ipv4", "value": "77.83.36.18", "source": "OTX AlienVault", "confidence": 94, "severity": "high", "tags": ["apt", "fin7"], "description": "FIN7 GRIFFON C2 beacon endpoint"},
+    {"type": "ipv4", "value": "5.188.86.172", "source": "MISP Warninglist", "confidence": 95, "severity": "high", "tags": ["scanner", "cobalt-strike"], "description": "Cobalt Strike Team Server"},
+    {"type": "ipv4", "value": "91.219.236.137", "source": "abuse.ch URLhaus", "confidence": 93, "severity": "high", "tags": ["malware-distribution"], "description": "Active malware distribution host"},
+    {"type": "ipv4", "value": "195.123.246.138", "source": "Spamhaus DROP", "confidence": 99, "severity": "critical", "tags": ["drop", "hijacked"], "description": "Spamhaus DROP-listed — hijacked netblock"},
+    {"type": "ipv4", "value": "185.220.101.47", "source": "MISP Warninglist", "confidence": 96, "severity": "high", "tags": ["tor-exit"], "description": "Tor exit relay — abuse reports"},
+    {"type": "domain", "value": "onion-router-c2.tk", "source": "MalTrail", "confidence": 88, "severity": "high", "tags": ["c2", "dga"], "description": "Suspected DGA domain — C2 channel"},
+    {"type": "domain", "value": "update-microsoft-cdn.ru", "source": "SpiderFoot OSINT", "confidence": 92, "severity": "critical", "tags": ["typosquatting", "phishing"], "description": "Typosquatting Microsoft update domain"},
+    {"type": "domain", "value": "evil-beacon-2026.xyz", "source": "URLhaus", "confidence": 87, "severity": "high", "tags": ["beacon", "c2"], "description": "Cobalt Strike beacon callback domain"},
+    {"type": "cve", "value": "CVE-2024-21887", "source": "CISA KEV", "confidence": 100, "severity": "critical", "tags": ["ivanti", "rce", "kev"], "description": "Ivanti Connect Secure Command Injection — actively exploited"},
+    {"type": "cve", "value": "CVE-2023-44487", "source": "CISA KEV", "confidence": 100, "severity": "high", "tags": ["http2", "dos", "kev"], "description": "HTTP/2 Rapid Reset Attack (CVE-2023-44487)"},
+    {"type": "ipv4", "value": "103.21.124.5", "source": "AbuseIPDB", "confidence": 91, "severity": "high", "tags": ["ssh-bruteforce"], "description": "SSH brute-force — India-based scanner"},
+    {"type": "ipv4", "value": "175.45.176.3", "source": "FireEye iSIGHT", "confidence": 93, "severity": "critical", "tags": ["lazarus", "apt"], "description": "Lazarus Group infrastructure — DPRK"}
+  ],
+  "threat_actors": [
+    {
+      "id": "intrusion-set--apt29",
+      "name": "APT29",
+      "description": "Russian SVR-affiliated espionage group targeting government, energy, and healthcare...",
+      "aliases": ["Cozy Bear", "The Dukes", "YTTRIUM", "Nobelium"],
+      "techniques": ["T1566", "T1071", "T1078", "T1059", "T1027", "T1105", "T1573", "T1048"],
+      "tools": ["Cobalt Strike", "SUNBURST", "WellMess", "WellMail"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--volt-typhoon",
+      "name": "Volt Typhoon",
+      "description": "PRC state-sponsored actor targeting US critical infrastructure via living-off-the-land...",
+      "aliases": ["Bronze Silhouette", "Vanguard Panda", "DEV-0391"],
+      "techniques": ["T1190", "T1059", "T1078", "T1082", "T1083", "T1018", "T1105"],
+      "tools": ["KV-Botnet", "certutil.exe", "PowerShell"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--lazarus",
+      "name": "Lazarus Group",
+      "description": "DPRK state-sponsored group focused on financial theft and cryptocurrency operations...",
+      "aliases": ["HIDDEN COBRA", "Guardians of Peace", "Zinc"],
+      "techniques": ["T1566", "T1059.001", "T1071", "T1486", "T1055", "T1036"],
+      "tools": ["HOPLIGHT", "Custom RAT", "InfoStealer"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--scattered-spider",
+      "name": "Scattered Spider",
+      "description": "Financially motivated group specializing in social engineering and SIM-swapping...",
+      "aliases": ["UNC3944", "Muddled Libra", "0ktapus"],
+      "techniques": ["T1621", "T1078", "T1110", "T1059", "T1548"],
+      "tools": ["Custom RAT", "InfoStealer"],
+      "severity": "high"
+    },
+    {
+      "id": "intrusion-set--fin7",
+      "name": "FIN7",
+      "description": "Financially motivated group targeting retail POS and hospitality for payment card theft...",
+      "aliases": ["Carbon Spider", "Carbanak", "ITG14"],
+      "techniques": ["T1566", "T1059", "T1071.001", "T1053", "T1047"],
+      "tools": ["GRIFFON", "Cobalt Strike", "Mimikatz"],
+      "severity": "high"
+    },
+    {
+      "id": "intrusion-set--apt41",
+      "name": "APT41",
+      "description": "Chinese dual-purpose espionage and cybercrime group targeting healthcare and telecom...",
+      "aliases": ["Winnti", "BARIUM", "Double Dragon", "Wicked Panda"],
+      "techniques": ["T1190", "T1059", "T1078", "T1574", "T1055", "T1210"],
+      "tools": ["ShadowPad", "PlugX", "Cobalt Strike"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--sandworm",
+      "name": "Sandworm Team",
+      "description": "Russian GRU Unit 74455 responsible for ICS/SCADA attacks and destructive operations...",
+      "aliases": ["ELECTRUM", "Telebots", "Voodoo Bear", "IRIDIUM"],
+      "techniques": ["T1059", "T1486", "T1190", "T1569", "T1105", "T1027"],
+      "tools": ["BlackEnergy", "Industroyer", "NotPetya", "Olympic Destroyer"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--turla",
+      "name": "Turla",
+      "description": "Russian FSB-affiliated espionage group targeting government and military networks...",
+      "aliases": ["Venomous Bear", "Snake", "Uroburos", "Waterbug"],
+      "techniques": ["T1071", "T1059", "T1078", "T1573", "T1219", "T1036"],
+      "tools": ["Cobalt Strike", "PowerShell"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--equation",
+      "name": "Equation",
+      "description": "Highly sophisticated group with access to zero-day exploits and firmware-level implants...",
+      "aliases": ["Equation Group", "EQGRP"],
+      "techniques": ["T1190", "T1059", "T1574", "T1055", "T1027"],
+      "tools": ["Custom RAT"],
+      "severity": "critical"
+    },
+    {
+      "id": "intrusion-set--gorgon",
+      "name": "Gorgon Group",
+      "description": "Pakistan-based group targeting government and military with commodity RATs...",
+      "aliases": ["Subaat"],
+      "techniques": ["T1566", "T1059", "T1105"],
+      "tools": ["njRAT", "Custom RAT"],
+      "severity": "high"
+    },
+    {
+      "id": "intrusion-set--mustang-panda",
+      "name": "Mustang Panda",
+      "description": "Chinese espionage group targeting government and non-profits via USB-propagated malware...",
+      "aliases": ["Bronze President", "RedDelta", "TA416"],
+      "techniques": ["T1566", "T1059", "T1547", "T1105", "T1036"],
+      "tools": ["PlugX", "Cobalt Strike"],
+      "severity": "high"
+    },
+    {
+      "id": "intrusion-set--oilrig",
+      "name": "OilRig",
+      "description": "Iranian state-sponsored group targeting Middle Eastern government and energy sectors...",
+      "aliases": ["APT34", "Helix Kitten", "Crambus"],
+      "techniques": ["T1566", "T1059", "T1078", "T1071", "T1048"],
+      "tools": ["Custom RAT", "Mimikatz", "PowerShell"],
+      "severity": "high"
+    }
+  ]
+}

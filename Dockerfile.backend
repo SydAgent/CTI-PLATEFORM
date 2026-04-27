@@ -1,0 +1,42 @@
+# ============================================================================
+# ONYX CTI Platform — Backend (FastAPI)
+# Architecture: Python 3.11-slim
+# ============================================================================
+FROM python:3.11-slim AS builder
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+# System dependencies for native extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install core dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip wheel --no-cache-dir --no-deps --wheel-dir /usr/src/app/wheels -r requirements.txt
+
+# --- Final Production Stage ---
+FROM python:3.11-slim
+
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app:/app/onyx-api:/app/onyx-core:/app/onyx-nlp:/app/onyx-analyzers:/app/onyx-connectors:/app/onyx-crawlers
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pre-built wheels
+COPY --from=builder /usr/src/app/wheels /wheels
+COPY --from=builder /app/requirements.txt .
+RUN pip install --no-cache-dir /wheels/*
+
+# Copy workspace
+COPY . .
+
+# Run Uvicorn directly targeting the API router
+CMD ["uvicorn", "onyx_api.main:app", "--app-dir", "/app/onyx-api", "--host", "0.0.0.0", "--port", "8000", "--workers", "4", "--proxy-headers"]

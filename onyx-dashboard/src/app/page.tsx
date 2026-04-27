@@ -34,10 +34,10 @@ const DashboardClient = dynamic(
       }}>
         <div style={{ fontSize: '2rem', opacity: 0.8 }}>◆</div>
         <div style={{ fontSize: '14px', color: '#00eeff', letterSpacing: '0.2em', textTransform: 'uppercase' }}>
-          ONYX CTI — Initializing Command Center
+          ONYX CTI — Initialisation du Centre de Commandement
         </div>
         <div style={{ fontSize: '11px', color: '#374151', letterSpacing: '0.1em' }}>
-          Loading secure intelligence matrix...
+          Chargement de la matrice de renseignement sécurisée...
         </div>
       </div>
     ),

@@ -32,10 +32,27 @@ from onyx_core.models.stix import (
     new_threat_actor,
 )
 
+from onyx_core.models.threat_actor_model import (
+    CampagneInfo,
+    NiveauPriorite,
+    PhaseKillChain,
+    ReferenceIOC,
+    ScoreMenace,
+    TechniqueMITRE,
+    ThreatActorIntelCard,
+    ThreatActorSummary,
+    TypeActeur,
+)
+
+from onyx_core.models.actor_decay_profile import ActorDecayProfile, LearnedHalfLife
+
 __all__ = [
+    "ActorDecayProfile",
+    "LearnedHalfLife",
     "STIX_TYPE_MAP",
     "AttackPattern",
     "Campaign",
+    "CampagneInfo",
     "ExternalReference",
     "GranularMarking",
     "Identity",
@@ -45,17 +62,25 @@ __all__ = [
     "Location",
     "Malware",
     "MalwareType",
+    "NiveauPriorite",
     "PatternType",
+    "PhaseKillChain",
+    "ReferenceIOC",
     "Relationship",
     "RelationshipType",
     "Report",
     "STIXBase",
     "STIXBundle",
     "STIXObjectType",
+    "ScoreMenace",
     "Sighting",
     "TLPMarking",
+    "TechniqueMITRE",
     "ThreatActor",
+    "ThreatActorIntelCard",
     "ThreatActorSophistication",
+    "ThreatActorSummary",
+    "TypeActeur",
     "Vulnerability",
     "create_stix_object",
     "new_indicator",
@@ -63,3 +88,4 @@ __all__ = [
     "new_relationship",
     "new_threat_actor",
 ]
+

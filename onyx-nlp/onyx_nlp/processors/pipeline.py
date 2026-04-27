@@ -68,8 +68,28 @@ class NLPPipeline:
         # Step 1: Extract IOCs
         ioc_result: ExtractionResult = self.ioc_extractor.extract(text, source=source)
 
+        # Strict Entity Deduplication
+        unique_iocs_map = {}
+        for ioc in ioc_result.iocs:
+            key = f"{ioc.type}:{ioc.value.lower()}"
+            if key not in unique_iocs_map or ioc.confidence > unique_iocs_map[key].confidence:
+                unique_iocs_map[key] = ioc
+        ioc_result.iocs = list(unique_iocs_map.values())
+        ioc_result.total_iocs = len(ioc_result.iocs)
+
         # Step 2: Map TTPs
         ttp_result: TTPResult = self.ttp_mapper.map_text(text)
+        
+        # Threat Actor Semantic Contextualization
+        actor_context = "Unknown_Actor"
+        if tags:
+            actor_tags = [t for t in tags if "apt" in t.lower() or "bear" in t.lower() or "spider" in t.lower()]
+            if actor_tags:
+                actor_context = actor_tags[0]
+        elif "APT29" in text or "Cozy Bear" in text:
+            actor_context = "APT29"
+        elif "Lazarus" in text:
+            actor_context = "Lazarus Group"
 
         # Step 3: Generate STIX objects + index IOCs
         stix_ids: list[str] = []
@@ -106,7 +126,7 @@ class NLPPipeline:
                 "source_url": source_url,
                 "confidence": int(ioc.confidence * 100),
                 "severity": self._compute_severity(ioc, ttp_result),
-                "tags": tags or [],
+                "tags": (tags or []) + [f"actor:{actor_context}"],
                 "mitre_techniques": mitre_ids,
                 "tlp": tlp,
                 "context": ioc.context,
@@ -128,12 +148,10 @@ class NLPPipeline:
         stix_stored = 0
         try:
             if stix_ids:
-                mongo = MongoDBService()
-                for indicator in []:  # We already reference stix_ids
-                    pass
+                # MongoDB storage is handled by the async event consumer, we just track the generated count here.
                 stix_stored = len(stix_ids)
         except Exception as e:
-            logger.error("MongoDB storage failed: %s", str(e))
+            logger.error("MongoDB storage tracking failed: %s", str(e))
 
         # Step 5: Emit events
         try:

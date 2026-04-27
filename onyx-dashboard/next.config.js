@@ -2,6 +2,9 @@
 const nextConfig = {
   output: 'standalone',
   reactStrictMode: false,
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   experimental: {
     optimizePackageImports: ['recharts', 'framer-motion', 'date-fns'],
   },

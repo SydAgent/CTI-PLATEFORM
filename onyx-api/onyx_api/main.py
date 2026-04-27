@@ -7,7 +7,6 @@ Production-grade: CORS, lifecycle hooks, structured logging, health checks.
 from __future__ import annotations
 
 import asyncio
-import random
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -68,24 +67,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     # Initialize database services
-    es = ElasticsearchService()
-    await es.initialize()
-    logger.info("onyx.elasticsearch.ready")
+    try:
+        es = ElasticsearchService()
+        await es.initialize()
+        logger.info("onyx.elasticsearch.ready")
+    except Exception as e:
+        logger.error("onyx.elasticsearch.error", error=str(e))
 
-    mongo = MongoDBService()
-    await mongo.initialize()
-    logger.info("onyx.mongodb.ready")
+    try:
+        mongo = MongoDBService()
+        await mongo.initialize()
+        logger.info("onyx.mongodb.ready")
+    except Exception as e:
+        logger.error("onyx.mongodb.error", error=str(e))
 
-    redis_svc = RedisService()
-    await redis_svc.initialize()
-    logger.info("onyx.redis.ready")
-
-    # Publish system startup event
-    await redis_svc.publish_event(
-        stream="onyx:events:system",
-        event_type="system.started",
-        data={"version": "3.0.0", "env": config.env},
-    )
+    try:
+        redis_svc = RedisService()
+        await redis_svc.initialize()
+        logger.info("onyx.redis.ready")
+        app.state.redis_svc = redis_svc
+        await redis_svc.publish_event(
+            stream="onyx:events:system",
+            event_type="system.started",
+            data={"version": "3.0.0", "env": config.env},
+        )
+    except Exception as e:
+        logger.error("onyx.redis.error", error=str(e))
+        app.state.redis_svc = None
 
     # --- Multi-Source OSINT Real-Time Ingestion ---
     logger.info("onyx.ingestion", message="[ONYX] Arming multi-source OSINT pipeline...")
@@ -125,10 +133,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Always add community-curated fallback if feeds unreachable
     if len(armed) < 10:
         armed = [
-            {"type": "ipv4", "value": "185.220.101.45", "source": "MISP Warninglist", "confidence": 98, "severity": "high", "tags": ["c2"]},
-            {"type": "ipv4", "value": "91.108.56.181",  "source": "MISP Warninglist", "confidence": 97, "severity": "high", "tags": ["c2"]},
-            {"type": "ipv4", "value": "194.165.16.78",  "source": "Feodo Tracker",   "confidence": 99, "severity": "critical", "tags": ["feodo"]},
-            {"type": "domain", "value": "onion-router-c2.tk", "source": "SpiderFoot", "confidence": 88, "severity": "high", "tags": ["c2"]},
+            {"type": "ipv4", "value": "185.220.101.45", "source": "ONYX Static Seed", "confidence": 98, "severity": "high", "tags": ["c2"]},
+            {"type": "ipv4", "value": "91.108.56.181",  "source": "ONYX Static Seed", "confidence": 97, "severity": "high", "tags": ["c2"]},
+            {"type": "ipv4", "value": "194.165.16.78",  "source": "ONYX Static Seed", "confidence": 99, "severity": "critical", "tags": ["feodo"]},
+            {"type": "domain", "value": "onion-router-c2.tk", "source": "ONYX Static Seed", "confidence": 88, "severity": "high", "tags": ["c2"]},
         ]
 
     app.state.armed_iocs = armed
@@ -141,7 +149,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # --- AI Subsystem: Gemini + RAG + Guardrails (Singleton Services) ---
     from onyx_api.services.rag_pipeline import rag_pipeline
+    from onyx_api.services.osint_integrations import MitreConnector, AlienVaultConnector
+    from onyx_api.services.geoip import GeoIPResolver
     from onyx_api.services.guardrails import guardrails_engine
+
+    # Inject Redis into OSINT connectors so @redis_cache_decorator can function
+    MitreConnector.redis_svc = redis_svc
+    AlienVaultConnector.redis_svc = redis_svc
 
     gemini_cfg = config.gemini
     if gemini_cfg.api_key:
@@ -157,52 +171,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.info("onyx.guardrails.ready")
 
             logger.info("onyx.ai.ready", message="RAG pipeline + Gemini + Guardrails operational")
-        except Exception as ai_err:
-            logger.error("onyx.ai.init_failed", error=str(ai_err))
+        except Exception as e:
+            logger.error("onyx.redis.init_failed", error=str(e))
     else:
         logger.warning("onyx.ai.disabled", message="GEMINI_API_KEY not set — AI features disabled")
 
+    # OSINT Preload Task (Phase 6) — always runs now that app.state.redis_svc is set
+    asyncio.create_task(MitreConnector.preload_cache(redis_svc))
+
+    # Add GeoIP Initialization (Phase 7)
+    asyncio.create_task(GeoIPResolver.initialize())
+
     logger.info("onyx.ready", message="All services initialized — ONYX is operational")
 
-    # --- Live Exhibition Telemetry Task ---
-    async def telemetry_simulator(redis_svc):
-        while True:
-            await asyncio.sleep(1.0)
-            try:
-                await redis_svc.publish_event(
-                    stream="onyx:events:iocs",
-                    event_type="heartbeat",
-                    data={"status": "ONLINE", "type": "heartbeat", "value": "SYSTEM_LIVE"}
-                )
-            except Exception:
-                pass
-            
-            try:
-                # NLP AI Mock Engine Live Stream
-                if random.random() > 0.2:
-                    scibert_samples = [
-                        {"raw": "APT29 cluster detected exfiltrating data to 185.220.101.45 via modified Cobalt Strike beacon (SHA256: 3a2c02...). TTPs match T1071 and T1560.", "entities": [{"label": "THREAT_ACTOR", "text": "APT29", "conf": 0.98}, {"label": "IP_ADDRESS", "text": "185.220.101.45", "conf": 0.99}, {"label": "MALWARE", "text": "Cobalt Strike beacon", "conf": 0.95}, {"label": "HASH", "text": "3a2c02...", "conf": 0.99}, {"label": "MITRE_TTP", "text": "T1071", "conf": 0.92}, {"label": "MITRE_TTP", "text": "T1560", "conf": 0.94}]},
-                        {"raw": "Volt Typhoon observed exploiting CVE-2024-21887 on internet-facing Ivanti appliances. Payload dropped: c:\\windows\\temp\\installer.exe. C2 domain: onion-router-c2.tk", "entities": [{"label": "THREAT_ACTOR", "text": "Volt Typhoon", "conf": 0.97}, {"label": "VULNERABILITY", "text": "CVE-2024-21887", "conf": 0.99}, {"label": "FILEPATH", "text": "c:\\windows\\temp\\installer.exe", "conf": 0.91}, {"label": "DOMAIN", "text": "onion-router-c2.tk", "conf": 0.98}]},
-                        {"raw": "Lazarus spearphishing campaign isolated. Email subject: 'Q2 Trading Strategy'. Attachment invoice.pdf contains LNK file triggering Powershell download from 91.108.56.181.", "entities": [{"label": "THREAT_ACTOR", "text": "Lazarus", "conf": 0.96}, {"label": "ATTACK_VECTOR", "text": "spearphishing", "conf": 0.94}, {"label": "FILENAME", "text": "invoice.pdf", "conf": 0.88}, {"label": "TOOL", "text": "Powershell", "conf": 0.99}, {"label": "IP_ADDRESS", "text": "91.108.56.181", "conf": 0.99}]},
-                        {"raw": "Suspicious RDP brute force attempting to breach internal network from 45.142.212.100. Sigma rule hit: sigma_rdp_bruteforce_t1110.", "entities": [{"label": "ATTACK_VECTOR", "text": "RDP brute force", "conf": 0.93}, {"label": "IP_ADDRESS", "text": "45.142.212.100", "conf": 0.99}, {"label": "SIGMA_RULE", "text": "sigma_rdp_bruteforce_t1110", "conf": 1.0}]}
-                    ]
-                    await nlp_manager.broadcast(random.choice(scibert_samples))
-    
-                if random.random() > 0.4:
-                    ips = ["185.220.101.45", "91.108.56.181", "194.165.16.78", "45.142.212.100", "77.83.36.18"]
-                    try:
-                        await redis_svc.publish_event(
-                            stream="onyx:events:iocs",
-                            event_type="ioc_detected",
-                            data={"type": "ipv4", "value": random.choice(ips), "source": "Live OTX Stream", "confidence": random.randint(85, 100)}
-                        )
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.error("telemetry.loop.error", error=str(e))
+    # --- Live Telemetry Task Removed (Zero Fake Data) ---
+    logger.info("onyx.telemetry", message="Simulator disabled. Using real event bus for OSINT.")
 
-    telemetry_task = asyncio.create_task(telemetry_simulator(redis_svc))
-    
     # --- Module 3: Sovereign Dynamic Reports Ingestion Task ---
     from onyx_api.workers.dynamic_reports import start_dynamic_reports_worker
     async def sse_broadcast_proxy(data):
@@ -210,11 +194,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await nlp_manager.broadcast(data)
         # AND broadcast to the unified dashboard SSE channel
         from onyx_core.services import RedisService
-        await RedisService().publish_event(
+        _redis = RedisService()
+        await _redis.publish_event(
             stream="onyx:events:iocs",
             event_type="nlp_extraction",
-            data=data
+            data=data,
         )
+        # v4.0-APEX: dual-publish to WebSocket Event Bus
+        await _redis.ws_publish("nlp_extraction", data)
     # Start the sovereign NLP reports engine
     rss_task = asyncio.create_task(start_dynamic_reports_worker(app.state, sse_broadcast_proxy))
 
@@ -222,31 +209,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from onyx_api.workers.osint_poller import start_osint_poller
 
     async def osint_broadcast(data: dict):
-        """Broadcast new IOC to SSE stream via Redis."""
+        """Broadcast new IOC to SSE stream + WebSocket Event Bus."""
+        if data.get("type") in ("ipv4", "ipv6"):
+            try:
+                geo = await GeoIPResolver.resolve(data.get("value", "0.0.0.0"))
+                data["geolocation"] = geo  # resolve() is now guaranteed non-None
+            except Exception:
+                data["geolocation"] = {"latitude": 0.0, "longitude": 0.0, "country": "Unresolved", "city": "Unknown Origin"}
+
         try:
             await redis_svc.publish_event(
                 stream="onyx:events:iocs",
                 event_type="ioc_detected",
                 data=data,
             )
+            # v4.0-APEX: dual-publish
+            await redis_svc.ws_publish("ioc_detected", data)
         except Exception:
             pass
 
     osint_task = asyncio.create_task(
-        start_osint_poller(app.state, osint_broadcast, poll_interval=300)
+        start_osint_poller(app.state, osint_broadcast, poll_interval=15)
     )
 
     # --- Module 5: Geopolitical Threat Ingestor ---
     from onyx_api.workers.geopolitical_ingestor import start_geopolitical_ingestor
 
     async def geopolitical_broadcast(data: dict):
-        """Broadcast geopolitical threat to SSE stream."""
+        """Broadcast geopolitical threat to SSE + WebSocket Event Bus."""
         try:
             await redis_svc.publish_event(
                 stream="onyx:events:iocs",
                 event_type="geopolitical_threat",
                 data=data,
             )
+            # v4.0-APEX: dual-publish
+            await redis_svc.ws_publish("geopolitical_threat", data)
         except Exception:
             pass
         try:
@@ -258,13 +256,28 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         start_geopolitical_ingestor(app.state, geopolitical_broadcast, poll_interval=300)
     )
 
+    # --- Phase 1: Decay Engine Workers ---
+    from onyx_api.workers.ioc_persister import run_decay_recalc_loop
+    from onyx_api.workers.decay_learning_worker import run_decay_learning_loop
+
+    decay_recalc_task = asyncio.create_task(run_decay_recalc_loop())
+    decay_learning_task = asyncio.create_task(run_decay_learning_loop())
+    logger.info("onyx.decay.workers.started")
+
+    # --- v4.0-APEX: Start WebSocket Event Bus Redis listener ---
+    from onyx_api.routers.websocket_hub import start_redis_listener, stop_redis_listener
+    ws_listener_task = start_redis_listener()
+    logger.info("onyx.ws.event_bus.ready", message="WebSocket Event Bus operational")
+
     yield
 
-    telemetry_task.cancel()
     if rss_task:
         rss_task.cancel()
     osint_task.cancel()
     geopolitical_task.cancel()
+    decay_recalc_task.cancel()
+    decay_learning_task.cancel()
+    stop_redis_listener()
 
     # --- Shutdown ---
     logger.info("onyx.shutdown", message="Graceful shutdown initiated")
@@ -304,31 +317,40 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # --- CORS ---
+    # --- CORS (v4.0-APEX: environment-aware) ---
+    cors_origins = config.api_cors_origins if config.api_cors_origins else ["*"]
+    # In development, allow all origins for rapid iteration
+    if config.debug or config.env == "development":
+        cors_origins = ["*"]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Bypass CORS completely for real-time frontend integration
-        allow_credentials=False,
+        allow_origins=cors_origins,
+        allow_credentials=True if "*" not in cors_origins else False,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["*"],
     )
 
     # --- Register Routers ---
-    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, forum
+    from onyx_api.routers import health, iocs, dashboard, auth, taxii, internal, nlp, agent, chat, mitre, reports, actors
+    from onyx_api.routers import websocket_hub
 
     app.include_router(health.router, prefix="/api/v1", tags=["Health"])
     app.include_router(iocs.router, prefix="/api/v1", tags=["IOCs"])
     app.include_router(dashboard.router, prefix="/api/v1", tags=["Dashboard"])
     app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
     app.include_router(mitre.router, prefix="/api/v1", tags=["MITRE"])
-    app.include_router(forum.router, prefix="/api/v1", tags=["Forum"])
+    app.include_router(actors.router, tags=["Actors"])
 
     app.include_router(nlp.router, prefix="/api/v1", tags=["NLP"])
     app.include_router(agent.router, prefix="/api/v1", tags=["Agent"])
     app.include_router(taxii.router, tags=["TAXII 2.1"])
     app.include_router(internal.router, prefix="/api/v1", tags=["Internal"])
     app.include_router(chat.router, prefix="/api/v1")
+    app.include_router(reports.router, prefix="/api/v1", tags=["Reports"])
+
+    # v4.0-APEX: WebSocket Event Bus
+    app.include_router(websocket_hub.router, tags=["WebSocket"])
 
     @app.websocket("/ws/nlp")
     async def nlp_websocket(websocket: WebSocket):

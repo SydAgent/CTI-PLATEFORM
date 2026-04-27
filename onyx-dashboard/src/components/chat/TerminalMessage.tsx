@@ -42,7 +42,7 @@ export function TerminalMessage({ role, content, tags }: TerminalMessageProps) {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-x-auto">
+      <div className="flex-1 overflow-x-hidden overflow-y-visible" style={{ wordBreak: 'break-word' }}>
         <div className="flex items-center gap-2 mb-2">
           <span className={cn("text-xs font-bold uppercase tracking-wider", isAssistant ? "text-[#00f0ff]" : "text-[#8b95a8]")}>
             {isAssistant ? "ONYX TACTICAL AI" : "ANALYST"}
@@ -131,7 +131,7 @@ function CodeBlock({ language, content }: { language?: string, content: string }
       <div className="relative p-4 overflow-x-auto">
         {/* Glow effect on hover */}
         <div className="absolute inset-0 opacity-0 group-hover:opacity-10 pointer-events-none transition-opacity bg-gradient-to-r from-[#00f0ff] to-transparent mix-blend-overlay"></div>
-        <pre className="text-sm font-mono text-[#e8ecf4] whitespace-pre">
+        <pre className="text-sm font-mono text-[#e8ecf4] whitespace-pre-wrap break-all">
           <code>{content}</code>
         </pre>
       </div>

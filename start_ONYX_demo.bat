@@ -21,6 +21,7 @@ echo [+] FIRING NLP STRESS TEST (SciBERT Injection)
 start "ONYX STRESS TEST" cmd /k "cd /d "%~dp0" && py test_ia_live.py"
 
 echo.
-echo [!] LAUNCH SEQUENCE COMPLETE. 
+echo [!] LAUNCH SEQUENCE COMPLETE.
 echo [!] ACCESS DASHBOARD AT: http://localhost:3000
+start chrome "http://localhost:3000"
 echo =======================================================

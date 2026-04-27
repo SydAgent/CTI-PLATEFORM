@@ -101,6 +101,8 @@ async def agent_chat_stream(request: Request) -> StreamingResponse:
     if not user_message:
         user_message = "Hello"
 
+    logger.info(f"AGENT STREAM RECEIVED user_message={user_message} body={body}")
+
     # ── Input guardrail ──────────────────────────────────────────────
     input_check = guardrails_engine.validate_input(user_message)
     if not input_check.allowed:

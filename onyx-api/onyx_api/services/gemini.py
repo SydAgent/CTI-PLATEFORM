@@ -44,6 +44,7 @@ class GeminiService:
         self._embedding_model_id: str = ""
         self._temperature: float = 0.3
         self._max_output_tokens: int = 8192
+        self._mock_mode: bool = False
 
     # ── Lazy init ────────────────────────────────────────────────────────
 
@@ -55,10 +56,9 @@ class GeminiService:
         cfg = get_config().gemini
 
         if not cfg.api_key:
-            raise RuntimeError(
-                "GEMINI_API_KEY is not set. "
-                "Provide it via environment variable or .env file."
-            )
+            logger.warning("GEMINI_API_KEY not set. Activating Mock Mode for demonstrations.")
+            self._mock_mode = True
+            return None # type: ignore
 
         self._client = genai.Client(api_key=cfg.api_key)
         self._model_id = cfg.model
@@ -97,6 +97,9 @@ class GeminiService:
         Non-streaming generation with retry on 429 / 503.
         Returns the full response text.
         """
+        if self._mock_mode:
+            return "**[MODE DEMO]** J'ai besoin d'une clé API valide pour effectuer cette action."
+
         client = self._ensure_client()
 
         config = types.GenerateContentConfig(
@@ -159,6 +162,19 @@ class GeminiService:
         Streaming generation with retry on 429 / 503.
         Yields text chunks as they arrive.
         """
+        if self._mock_mode:
+            mock_text = (
+                "**[MODE DEMO - CLÉ API MANQUANTE]**\n\n"
+                "Je suis ONYX Copilot. Mon accès à Gemini est bloqué car la `GEMINI_API_KEY` "
+                "n'a pas été configurée.\n\n"
+                "Veuillez définir cette variable pour activer mes capacités d'analyse tactique "
+                "sur la menace."
+            )
+            for word in mock_text.split(" "):
+                yield word + " "
+                await asyncio.sleep(0.05)
+            return
+
         client = self._ensure_client()
 
         config = types.GenerateContentConfig(
@@ -221,6 +237,10 @@ class GeminiService:
         if not texts:
             return []
             
+        if self._mock_mode:
+            # Return dummy zero-vectors
+            return [[0.0] * 3072 for _ in texts]
+
         client = self._ensure_client()
 
         all_embeddings = []
