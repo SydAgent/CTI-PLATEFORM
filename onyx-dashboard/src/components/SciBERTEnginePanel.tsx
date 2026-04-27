@@ -1,53 +1,46 @@
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
+import { useOnyxStore } from '@/lib/store';
 
-type Extraction = { raw: string; entities: { label: string; text: string; conf: number }[] };
+type Extraction = { raw?: string; rawText?: string; title?: string; text?: string; entities?: { label: string; text: string; conf?: number }[] };
 
 export default function SciBERTEnginePanel() {
   const [stream, setStream] = useState<Extraction[]>([]);
   const [pinnedItems, setPinnedItems] = useState<Extraction[]>([]);
   const isPausedRef = useRef(false);
-  const queue = useRef<Extraction[]>([]);
   const [isHovering, setIsHovering] = useState(false);
 
+  const events = useOnyxStore(s => s.events);
+
   useEffect(() => {
-    let ws: WebSocket;
-    const connect = () => {
-      ws = new WebSocket('ws://localhost:8000/ws/nlp');
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (isPausedRef.current) {
-            queue.current.push(data);
-            if (queue.current.length > 30) queue.current.shift();
-          } else {
-            setStream(prev => {
-              // reverse queue to keep chronological order if prepping to top
-              const next = [...queue.current.reverse(), data, ...prev].slice(0, 15);
-              queue.current = [];
-              return next;
-            });
-          }
-        } catch (e) {}
-      };
-      ws.onclose = () => setTimeout(connect, 3000);
-    };
-    connect();
-    return () => ws?.close();
-  }, []);
+    if (!isPausedRef.current) {
+      // Filtrer les événements NLP depuis le flux SSE global, et les afficher (les plus récents en premier)
+      const nlpData = [...events]
+        .reverse()
+        .filter(e => e.type === 'nlp_extraction')
+        .map(e => e.data as Extraction)
+        .slice(0, 15);
+      
+      if (nlpData.length > 0) {
+        setStream(nlpData);
+      }
+    }
+  }, [events]);
+
+  const getRawString = (item: Extraction) => item.raw || item.rawText || item.title || item.text || '';
 
   const togglePin = (item: Extraction) => {
     setPinnedItems(prev => {
-      if (prev.some(p => p.raw === item.raw)) {
-        return prev.filter(p => p.raw !== item.raw);
+      if (prev.some(p => getRawString(p) === getRawString(item))) {
+        return prev.filter(p => getRawString(p) !== getRawString(item));
       }
       return [item, ...prev].slice(0, 5); // Max 5 pinned items
     });
   };
 
   const renderHighlightedText = (item: Extraction) => {
-    let tempRaw = item.raw || '';
+    let tempRaw = getRawString(item);
     const chunks: React.ReactNode[] = [];
     let lastIndex = 0;
     
@@ -71,7 +64,7 @@ export default function SciBERTEnginePanel() {
             <span className="font-bold">{ent.text}</span>
             <span className="text-[9px] uppercase tracking-wider opacity-80 border-l border-current pl-1 ml-1">{ent.label}</span>
             <span className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-black border border-gray-700 text-white text-[10px] px-2 py-1 rounded whitespace-nowrap z-10 font-mono shadow-xl">
-              Conf: {(ent.conf * 100).toFixed(1)}%
+              Conf: {((ent.conf || 0) * 100).toFixed(1)}%
             </span>
           </div>
         );
@@ -83,11 +76,11 @@ export default function SciBERTEnginePanel() {
       chunks.push(<span key="text-last" className="text-gray-300">{tempRaw.slice(lastIndex)}</span>);
     }
     
-    return chunks.length > 0 ? chunks : <span className="text-gray-300">{item.raw}</span>;
+    return chunks.length > 0 ? chunks : <span className="text-gray-300">{tempRaw}</span>;
   };
 
   const renderStreamItem = (item: Extraction, idx: number, isPinned: boolean = false) => {
-    const isAlreadyPinned = pinnedItems.some(p => p.raw === item.raw);
+    const isAlreadyPinned = pinnedItems.some(p => getRawString(p) === getRawString(item));
     return (
       <div 
         key={isPinned ? `pinned-${idx}` : `stream-${idx}`} 
@@ -98,7 +91,7 @@ export default function SciBERTEnginePanel() {
           onClick={() => togglePin(item)}
           className={`absolute top-2 right-2 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity text-[10px] uppercase font-bold border ${isAlreadyPinned ? 'bg-amber-900/50 text-amber-500 border-amber-500' : 'bg-gray-800 text-gray-400 border-gray-600 hover:text-white'}`}
         >
-          {isAlreadyPinned ? '📌 UNPIN' : '📌 PIN'}
+          {isAlreadyPinned ? '📌 RETIRER' : '📌 PIN'}
         </button>
 
         <div className="text-xs leading-relaxed tracking-wide pr-14">
@@ -128,28 +121,67 @@ export default function SciBERTEnginePanel() {
 
       <h3 className="text-purple-400 text-sm font-bold mb-4 flex items-center uppercase tracking-widest border-b border-purple-900/50 pb-3 relative z-10">
         <span className={`w-2 h-2 rounded-full ${isHovering ? 'bg-amber-500' : 'bg-purple-500 animate-[ping_1.5s_cubic-bezier(0,0,0.2,1)_infinite]'} mr-3 shadow-[0_0_10px_#a855f7]`}></span>
-        SciBERT Reconnaissance Engine
-        {isHovering && <span className="ml-3 text-[10px] text-amber-500 font-bold border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 rounded">PAUSED</span>}
-        <span className="ml-auto text-[10px] bg-purple-950 text-purple-300 px-2 py-1 rounded-full border border-purple-800 font-mono">NEURAL_NET_LIVE</span>
+        Moteur de Reconnaissance SciBERT
+        {isHovering && <span className="ml-3 text-[10px] text-amber-500 font-bold border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 rounded">EN PAUSE</span>}
+        <span className="ml-auto text-[10px] bg-purple-950 text-purple-300 px-2 py-1 rounded-full border border-purple-800 font-mono">RÉSEAU_NEURONAL_ACTIF</span>
       </h3>
 
       <div className="flex-1 overflow-y-auto space-y-4 pr-2 relative z-10 scrollbar-hide">
         {/* Pinned Items Section */}
         {pinnedItems.length > 0 && (
           <div className="space-y-4 mb-6 pb-6 border-b-2 border-dashed border-gray-800">
-            <div className="text-[10px] text-gray-500 uppercase font-bold sticky top-0 bg-[#03060a]/90 backdrop-blur pb-2 z-20">📌 Épinglés (Pinned Intelligence) {isHovering ? ' - ' + pinnedItems.length : ''}</div>
+            <div className="text-[10px] text-gray-500 uppercase font-bold sticky top-0 bg-[#03060a]/90 backdrop-blur pb-2 z-20">📌 Renseignements Épinglés {isHovering ? ' — ' + pinnedItems.length + ' élément(s)' : ''}</div>
             {pinnedItems.map((item, idx) => renderStreamItem(item, idx, true))}
           </div>
         )}
 
         {/* Live Stream Section */}
-        {stream.length === 0 && Array.from({length: 3}).map((_, i) => (
-           <div key={`skel-${i}`} className="h-16 bg-gray-900/50 animate-pulse rounded border border-gray-800 mb-4"></div>
-        ))}
+        {stream.length === 0 && (
+          <div className="flex flex-col items-center justify-center py-10 gap-5">
+            {/* Neural Network Monitoring Visualization */}
+            <div className="relative">
+              <div className="w-20 h-20 rounded-full border-2 border-purple-500/30 flex items-center justify-center">
+                <div className="w-14 h-14 rounded-full border border-purple-400/50 flex items-center justify-center animate-[spin_8s_linear_infinite]">
+                  <div className="w-8 h-8 rounded-full bg-purple-500/20 border border-purple-400 flex items-center justify-center shadow-[0_0_20px_rgba(168,85,247,0.3)]">
+                    <span className="text-purple-300 text-sm">◈</span>
+                  </div>
+                </div>
+              </div>
+              <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-green-500 animate-pulse shadow-[0_0_8px_#22c55e]" />
+            </div>
+
+            <div className="text-center space-y-1.5">
+              <div className="text-[11px] text-purple-300 font-bold uppercase tracking-[0.2em]">Monitoring Actif</div>
+              <div className="text-[10px] text-gray-500 leading-relaxed max-w-[260px]">
+                Le réseau neuronal SciBERT analyse le flux SSE en temps réel.<br />
+                Les extractions apparaîtront ici automatiquement.
+              </div>
+            </div>
+
+            {/* Pipeline Status Indicators */}
+            <div className="flex gap-3 mt-2">
+              {[
+                { label: 'SSE', status: true },
+                { label: 'NLP', status: true },
+                { label: 'NER', status: true },
+              ].map(p => (
+                <div key={p.label} className="flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider px-2.5 py-1 rounded border border-gray-800 bg-black/40">
+                  <span className={`w-1.5 h-1.5 rounded-full ${p.status ? 'bg-green-500 shadow-[0_0_4px_#22c55e]' : 'bg-red-500'}`} />
+                  <span className="text-gray-400">{p.label}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center gap-2 mt-1">
+              <div className="w-1 h-1 rounded-full bg-purple-500 animate-ping" />
+              <span className="text-[9px] text-purple-600 uppercase tracking-[0.15em]">En attente du prochain signal OSINT</span>
+            </div>
+          </div>
+        )}
 
         {stream.map((item, idx) => {
           // If already pinned, optionally hide from stream, but user asked to be able to "gelé un événement", so we can show it or let the pinned block handle it.
-          if (pinnedItems.some(p => p.raw === item.raw)) return null;
+          if (pinnedItems.some(p => getRawString(p) === getRawString(item))) return null;
           return renderStreamItem(item, idx);
         })}
 

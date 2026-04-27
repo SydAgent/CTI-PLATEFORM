@@ -20,6 +20,9 @@ from typing import Any, Callable, Coroutine
 import httpx
 import structlog
 
+from onyx_api.config import settings
+from onyx_api.services.enrichment import EnrichmentService
+
 logger = structlog.get_logger("onyx.worker.osint_poller")
 
 # ── Feed Definitions ─────────────────────────────────────────────────────────
@@ -40,6 +43,30 @@ OSINT_SOURCES: list[dict[str, Any]] = [
         "label": "CISA KEV",
         "url": "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json",
         "parser": "_parse_cisa_kev",
+    },
+    {
+        "label": "AbuseCH URLhaus",
+        "url": "https://urlhaus-api.abuse.ch/v1/urls/recent/",
+        "parser": "_parse_urlhaus",
+    },
+    {
+        "label": "Tor Exit Nodes",
+        "url": "https://check.torproject.org/torbulkexitlist",
+        "parser": "_parse_tor_exit",
+        "text_mode": True,
+    },
+    {
+        "label": "OpenPhish",
+        "url": "https://openphish.com/feed.txt",
+        "parser": "_parse_openphish",
+        "text_mode": True,
+    },
+    {
+        "label": "ThreatFox",
+        "url": "https://threatfox-api.abuse.ch/api/v1/",
+        "parser": "_parse_threatfox",
+        "method": "POST",
+        "payload": {"query": "get_iocs", "days": 1}
     },
 ]
 
@@ -157,10 +184,71 @@ def _parse_cisa_kev(data: Any) -> list[dict[str, Any]]:
     return results
 
 
+def _parse_tor_exit(data: str) -> list[dict[str, Any]]:
+    """Parse Tor Exit Nodes list."""
+    results: list[dict[str, Any]] = []
+    for line in data.splitlines():
+        ip = line.strip()
+        if not ip or ip.startswith('#'):
+            continue
+        results.append({
+            "type": "ipv4",
+            "value": ip,
+            "source": "Tor Exit Nodes",
+            "confidence": 100,
+            "severity": "medium",
+            "tags": ["tor", "anonymization"],
+            "related_mitre_techniques": ["T1090.003"],
+        })
+    return results[:500]
+
+
+def _parse_openphish(data: str) -> list[dict[str, Any]]:
+    """Parse OpenPhish URLs."""
+    results: list[dict[str, Any]] = []
+    for line in data.splitlines():
+        url = line.strip()
+        if not url:
+            continue
+        results.append({
+            "type": "url",
+            "value": url,
+            "source": "OpenPhish",
+            "confidence": 95,
+            "severity": "high",
+            "tags": ["phishing", "credential-harvesting"],
+            "related_mitre_techniques": ["T1566"],
+        })
+    return results[:100]
+
+
+def _parse_threatfox(data: Any) -> list[dict[str, Any]]:
+    """Parse ThreatFox IOCs."""
+    results: list[dict[str, Any]] = []
+    if not isinstance(data, dict) or data.get("query_status") != "ok":
+        return results
+    iocs = data.get("data", [])
+    for entry in iocs[:100]:
+        results.append({
+            "type": entry.get("ioc_type", "unknown"),
+            "value": entry.get("ioc_value", ""),
+            "source": "ThreatFox",
+            "confidence": entry.get("confidence_level", 80),
+            "severity": "high",
+            "tags": ["threatfox", entry.get("threat_type", "")],
+            "malware_family": entry.get("malware_printable", ""),
+        })
+    return results
+
+
 _PARSERS = {
     "_parse_feodo": _parse_feodo,
     "_parse_et_compromised": _parse_et_compromised,
     "_parse_cisa_kev": _parse_cisa_kev,
+    "_parse_urlhaus": _parse_urlhaus,
+    "_parse_tor_exit": _parse_tor_exit,
+    "_parse_openphish": _parse_openphish,
+    "_parse_threatfox": _parse_threatfox,
 }
 
 
@@ -200,38 +288,94 @@ async def start_osint_poller(
         all_new: list[dict[str, Any]] = []
         logger.info("onyx.osint_poller.cycle", cycle=cycle)
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            for source in OSINT_SOURCES:
-                try:
-                    resp = await client.get(source["url"])
-                    resp.raise_for_status()
-                    parser = _PARSERS[source["parser"]]
-                    if source.get("text_mode"):
-                        parsed = parser(resp.text)
+        for source in OSINT_SOURCES:
+            try:
+                # ── URLhaus: isolated client with mandatory Auth-Key ──
+                if source["label"] == "AbuseCH URLhaus":
+                    _urlhaus_headers = {}
+                    if settings.URLHAUS_API_KEY:
+                        _urlhaus_headers["Auth-Key"] = settings.URLHAUS_API_KEY
+                    async with httpx.AsyncClient() as _urlhaus_client:
+                        resp = await _urlhaus_client.get(
+                            "https://urlhaus-api.abuse.ch/v1/urls/recent/",
+                            headers=_urlhaus_headers,
+                            timeout=15.0,
+                        )
+                else:
+                    async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                        if source.get("method") == "POST":
+                            resp = await client.post(source["url"], json=source.get("payload", {}))
+                        else:
+                            resp = await client.get(source["url"])
+
+                resp.raise_for_status()
+                parser = _PARSERS[source["parser"]]
+                if source.get("text_mode"):
+                    parsed = parser(resp.text)
+                else:
+                    parsed = parser(resp.json())
+
+                new_for_source = 0
+                for ioc in parsed:
+                    fp = _ioc_fingerprint(ioc)
+                    if fp not in seen:
+                        seen.add(fp)
+                        ioc["_ingested_at"] = datetime.now(timezone.utc).isoformat()
+                        
+                        # Injection dynamique de l'Infrastructure et Cibles (Hotfix)
+                        ioc = await EnrichmentService.enrich_ioc(ioc)
+                        
+                        all_new.append(ioc)
+                        new_for_source += 1
+
+                logger.info(
+                    "onyx.osint_poller.source_ok",
+                    label=source["label"],
+                    total_parsed=len(parsed),
+                    new=new_for_source,
+                )
+            except Exception as e:
+                logger.warning(
+                    "onyx.osint_poller.source_fail",
+                    label=source["label"],
+                    error=str(e),
+                )
+
+        # ── Fallback Historique Réel (Zéro Empty State) ──
+        if not all_new:
+            logger.warning("onyx.osint_poller.engage_fallback", message="API Streams empty. Engaging historical real data fallback.")
+            try:
+                import json
+                import os
+                fallback_path = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "osint_cache.json")
+                if os.path.exists(fallback_path):
+                    with open(fallback_path, "r", encoding="utf-8") as f:
+                        raw_cache = json.load(f)
+
+                    # osint_cache.json is a dict: {"iocs": [...], "threat_actors": [...]}
+                    if isinstance(raw_cache, dict):
+                        fallback_iocs = list(raw_cache.get("iocs", []))
+                    elif isinstance(raw_cache, list):
+                        fallback_iocs = list(raw_cache)
                     else:
-                        parsed = parser(resp.json())
+                        fallback_iocs = []
 
-                    new_for_source = 0
-                    for ioc in parsed:
-                        fp = _ioc_fingerprint(ioc)
-                        if fp not in seen:
-                            seen.add(fp)
-                            ioc["_ingested_at"] = datetime.now(timezone.utc).isoformat()
-                            all_new.append(ioc)
-                            new_for_source += 1
+                    logger.info("onyx.osint_poller.fallback_loaded", count=len(fallback_iocs))
 
-                    logger.info(
-                        "onyx.osint_poller.source_ok",
-                        label=source["label"],
-                        total_parsed=len(parsed),
-                        new=new_for_source,
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "onyx.osint_poller.source_fail",
-                        label=source["label"],
-                        error=str(e),
-                    )
+                    for fioc in fallback_iocs:
+                        fioc["_ingested_at"] = datetime.now(timezone.utc).isoformat()
+                        fioc["source"] = fioc.get("source", "Historical Cache") + " (Fallback)"
+                        fioc = await EnrichmentService.enrich_ioc(fioc)
+                        all_new.append(fioc)
+
+                    if fallback_iocs:
+                        logger.info("onyx.osint_poller.fallback_injected", count=len(fallback_iocs))
+                    else:
+                        logger.error("onyx.osint_poller.fallback_empty", message="osint_cache.json contained zero IOCs")
+                else:
+                    logger.error("onyx.osint_poller.fallback_missing", path=fallback_path)
+            except Exception as e:
+                logger.error("onyx.osint_poller.fallback_error", error=str(e))
 
         # Atomic state update
         if all_new:
@@ -262,6 +406,8 @@ async def start_osint_poller(
                             "source": ioc.get("source", ""),
                             "severity": ioc.get("severity", "medium"),
                             "confidence": ioc.get("confidence", 50),
+                            "geolocation": ioc.get("geolocation"),
+                            "target_geolocation": ioc.get("target_geolocation"),
                             "ts": datetime.now(timezone.utc).isoformat(),
                         })
                     except Exception:

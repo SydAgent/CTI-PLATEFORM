@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import os
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -26,9 +27,9 @@ logger = structlog.get_logger("onyx.worker.geopolitical")
 # ── RSS Feed Sources ─────────────────────────────────────────────────────────
 
 RSS_FEEDS = [
-    {"name": "BleepingComputer", "url": "https://www.bleepingcomputer.com/feed/"},
-    {"name": "The Hacker News", "url": "https://feeds.feedburner.com/TheHackersNews"},
-    {"name": "CISA Advisories", "url": "https://www.cisa.gov/cybersecurity-advisories/all.xml"},
+    {"name": "CERT-FR", "url": "https://www.cert.ssi.gouv.fr/feed/"},
+    {"name": "ANSSI Actualités", "url": "https://www.cert.ssi.gouv.fr/feed/"},
+    {"name": "ZATAZ Sec", "url": "https://www.zataz.com/feed/"},
 ]
 
 # ── GeoIP Cache ──────────────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ def _extract_entities(text: str) -> list[dict[str, str]]:
             key = f"{label}:{val.lower()}"
             if key not in seen:
                 seen.add(key)
-                entities.append({"label": label, "text": val})
+                entities.append({"label": label, "text": val, "conf": 0.98})
     return entities
 
 
@@ -191,6 +192,75 @@ async def start_geopolitical_ingestor(
         cycle += 1
         logger.info("onyx.geopolitical.cycle", cycle=cycle)
 
+        # 🚀 ZERO DELAY DIRECTIVE: Pipe IOC geolocations immediately on startup (cycle=1)
+        if cycle == 1:
+            try:
+                from onyx_core.services import MongoDBService
+                mongo = MongoDBService()
+                armed_iocs = await mongo.list_stix("indicator", limit=1000)
+            except Exception:
+                armed_iocs = getattr(app_state, "armed_iocs", [])
+
+            import geoip2.database
+
+            # ── Multi-path mmdb resolution (no synthetic fallback) ──
+            _mmdb_candidates = [
+                os.path.join(os.path.dirname(__file__), '../../data/GeoLite2-City.mmdb'),
+                os.path.abspath('data/GeoLite2-City.mmdb'),
+                r'C:\Users\USER\Downloads\CTI\CTI-Platform\onyx-api\data\GeoLite2-City.mmdb',
+            ]
+            _resolved_mmdb = None
+            for _cand in _mmdb_candidates:
+                _norm = os.path.normpath(_cand)
+                if os.path.isfile(_norm):
+                    _resolved_mmdb = _norm
+                    logger.info("onyx.geopolitical.mmdb_resolved", path=_norm)
+                    break
+            if not _resolved_mmdb:
+                logger.error("onyx.geopolitical.mmdb_not_found", candidates=_mmdb_candidates)
+
+            boot_markers: dict[str, dict] = {}
+            if _resolved_mmdb:
+                try:
+                    reader = geoip2.database.Reader(_resolved_mmdb)
+                    for ioc in armed_iocs:
+                        ip = str(ioc.get("value", ""))
+                        if not ip:
+                            continue
+                        try:
+                            response = reader.city(ip)
+                            lat = response.location.latitude
+                            lon = response.location.longitude
+                            country = response.country.name or "Unknown"
+                            code = response.country.iso_code or "XX"
+
+                            loc = {"country_code": code, "lat": lat, "lon": lon, "country": country}
+                            ioc["geolocation"] = loc
+
+                            if code not in boot_markers:
+                                boot_markers[code] = {
+                                    "lat": lat,
+                                    "lon": lon,
+                                    "country": country,
+                                    "country_code": code,
+                                    "count": 0,
+                                    "actors": [],
+                                }
+                            boot_markers[code]["count"] += 1
+                        except Exception:
+                            pass
+                    reader.close()
+                except Exception as e:
+                    logger.error("geoip2 error", error=str(e))
+
+            if boot_markers:
+                # Assign threat_level per marker
+                for m in boot_markers.values():
+                    c = m["count"]
+                    m["threat_level"] = "high" if c >= 10 else "medium" if c >= 4 else "low"
+                app_state.geopolitical_markers = list(boot_markers.values())
+                logger.info("onyx.geopolitical.startup", markers=len(boot_markers), message="Pushed immediate armed IOC markers on cycle 1")
+
         new_articles: list[dict] = []
         new_threats: list[dict] = []
         marker_updates: dict[str, dict] = {}  # country_code -> marker
@@ -259,10 +329,28 @@ async def start_geopolitical_ingestor(
                         await asyncio.sleep(1.5)
 
         # 4. Update state
-        if new_threats:
+        # Pipe IOC database geolocated IPs into markers
+        armed_iocs = getattr(app_state, "armed_iocs", [])
+        for ioc in armed_iocs:
+            loc = ioc.get("geolocation")
+            if loc and isinstance(loc, dict) and "lat" in loc and "lon" in loc:
+                code = loc.get("country_code", "XX")
+                if code not in marker_updates:
+                    marker_updates[code] = {
+                        "lat": loc["lat"],
+                        "lon": loc["lon"],
+                        "country": loc.get("country", "Unknown"),
+                        "country_code": code,
+                        "count": 0,
+                        "actors": [],
+                    }
+                marker_updates[code]["count"] += 1
+
+        if new_threats or marker_updates:
             current_threats = list(getattr(app_state, "geopolitical_threats", []))
-            current_threats = new_threats + current_threats
-            app_state.geopolitical_threats = current_threats[:200]  # Cap at 200
+            if new_threats:
+                current_threats = new_threats + current_threats
+                app_state.geopolitical_threats = current_threats[:200]  # Cap at 200
 
             # Merge markers
             existing_markers: dict[str, dict] = {}

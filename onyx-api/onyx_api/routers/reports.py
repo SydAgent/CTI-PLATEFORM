@@ -26,7 +26,6 @@ from onyx_api.services.osint_integrations import MitreConnector, AlienVaultConne
 
 router = APIRouter()
 
-STANDALONE = os.environ.get("STANDALONE_MODE", "").lower() == "true"
 
 # ─── Sector targeting map for identity objects ────────────────────────────────
 _ACTOR_SECTOR_MAP: dict[str, list[str]] = {
@@ -65,23 +64,17 @@ def _safe_serialize(obj: Any) -> Any:
 
 async def _get_threat_data_for_export(request: Request) -> dict:
     """Abstraction layer extracting real OSINT data for serialization."""
-    if STANDALONE:
-        # Generate standalone data natively
-        live_iocs = await AlienVaultConnector.fetch_live_iocs()
-        
-        # Genuine threat actors
-        actors = await MitreConnector.get_threat_actors()
-        # Fallback if unpopulated
-        if not actors:
-             actors = [
-                {"id": "TA0001", "name": "APT29", "aliases": ["Cozy Bear"], "severity": "critical", "live_iocs": 15},
-             ]
-        
-        return {"iocs": live_iocs, "actors": actors}
+    # En production, on utiliserait Elasticsearch/MongoDBService ici :
+    # mongo = MongoDBService(); actors = await mongo.list_stix("threat-actor")
+    live_iocs = await AlienVaultConnector.fetch_live_iocs()
+    actors = await MitreConnector.get_threat_actors()
+
+    if not actors:
+         actors = [
+            {"id": "TA0001", "name": "APT29", "aliases": ["Cozy Bear"], "severity": "critical", "live_iocs": 15},
+         ]
     
-    # E.g. connect to MongoDB/Elasticsearch here
-    # Placeholder for DB Logic
-    return {"iocs": [], "actors": []}
+    return {"iocs": live_iocs, "actors": actors}
 
 
 @router.get("/reports/export/stix", summary="Export tactical intelligence in STIX 2.1")
@@ -339,3 +332,10 @@ async def export_stix(
             "X-ONYX-TLP": tlp,
         }
     )
+
+@router.get("/reports/sitrep", summary="Générer un SITREP JSON structuré")
+async def generate_sitrep_json(tlp: str = Query(default="AMBER")):
+    """Retourne un rapport de situation (SITREP) structuré généré par le ReportEngine."""
+    from onyx_api.services.report_engine import ReportEngine
+    report = await ReportEngine.generer_rapport_sitrep(niveau_tlp=tlp)
+    return report.model_dump(mode="json")

@@ -6,7 +6,6 @@ Connects to real-world feeds (AlienVault OTX, MITRE, AbuseIPDB) with resilience.
 from __future__ import annotations
 import gc
 import json
-import asyncio
 import time
 from pathlib import Path
 from datetime import datetime, timezone
@@ -15,6 +14,7 @@ from functools import wraps
 
 import httpx
 from structlog import get_logger
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from onyx_core.config import get_config
 from onyx_core.services import RedisService
@@ -95,36 +95,67 @@ class AlienVaultConnector:
     @redis_cache_decorator("otx_live_iocs", ttl=600)  # 10 minute cache
     async def fetch_live_iocs(cls) -> list[dict[str, Any]]:
         """
-        Fetch real-world IOCs from AlienVault OTX Subscribed Pulses.
-        Maps them to the internal Dashboard Armed IOC schema.
+        Fetch real-world IOCs from AlienVault OTX exclusively.
         """
-        api_key = config.osint.alienvault_otx_key
-        headers = {"X-OTX-API-KEY": api_key} if api_key else {}
+        from onyx_api.config import settings
+        api_key = getattr(settings, "OTX_API_KEY", getattr(settings, "FEED_OTX_API_KEY", ""))
+        if not api_key:
+            logger.warning("AlienVault OTX API key missing, returning empty.")
+            return []
+            
+        url = "https://otx.alienvault.com/api/v1/indicators/export"
+        headers = {
+            "X-OTX-API-KEY": api_key,
+            "Content-Type": "application/json"
+        }
         
-        # We query the general pulses if no key is provided, or subscribed if we have one
-        url = "https://otx.alienvault.com/api/v1/pulses/subscribed" if api_key else "https://otx.alienvault.com/api/v1/pulses/activity?limit=25"
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=5, max=30),
+            retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
+            reraise=True,
+        )
+        async def _fetch() -> dict:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(url, params={"limit": 50}, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
+        data = await _fetch()
 
         results = []
-        for pulse in data.get("results", []):
-            source_name = "AlienVault OTX"
-            tags = pulse.get("tags", [])
-            for ind in pulse.get("indicators", [])[:10]: # limit IOCs per pulse
-                results.append({
-                     "id": f"otx-{ind.get('id')}",
-                     "type": ind.get("type", "unknown").lower(),
-                     "value": ind.get("indicator", ""),
-                     "severity": "high" if "malware" in tags else "medium",
-                     "confidence": 85,
-                     "source": source_name,
-                     "tags": tags,
-                     "description": pulse.get("name", ""),
-                     "timestamp": pulse.get("created", ""),
-                })
+        for ind in data.get("results", [])[:50]:
+            try:
+                ioc = {
+                    "id": f"otx-{ind.get('id', '')}",
+                    "type": "ipv4" if ind.get("type", "").lower() == "ipv4" else ("domain" if ind.get("type", "").lower() == "domain" else "url"),
+                    "value": ind.get("indicator", ""),
+                    "severity": "high",
+                    "confidence": 90,
+                    "source": "AlienVault OTX",
+                    "tags": [],
+                    "description": ind.get("description", ""),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                
+                lat = ind.get("latitude") or ind.get("lat")
+                lon = ind.get("longitude") or ind.get("lon")
+                code = ind.get("country_code") or ind.get("country")
+                
+                if lat is not None and lon is not None:
+                    try:
+                        ioc["geolocation"] = {
+                            "lat": float(lat),
+                            "lon": float(lon),
+                            "country_code": str(code or "XX"),
+                            "country": str(ind.get("country_name", code or "Unknown"))
+                        }
+                    except ValueError:
+                        pass
+                
+                results.append(ioc)
+            except Exception:
+                pass
         return results
 
 

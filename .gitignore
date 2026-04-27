@@ -1,14 +1,84 @@
+# ============================================================================
+# ONYX CTI v3.0 Genesis — .gitignore
+# ============================================================================
+
+# --- Dependencies ---
 node_modules/
+.pnpm-store/
 .venv/
 __pycache__/
 *.pyc
-.env
-error.log
-error2.log
-.DS_Store
-.next/
-build/
-dist/
-*.log
+*.pyo
 
+# --- Build & cache ---
+.next/
+out/
+dist/
+build/
+.cache/
+
+# --- Environment variables (CRITICAL — API keys) ---
+.env
+.env.local
+.env.development.local
+.env.production.local
+.env*.local
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+server_log*.txt
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# --- TypeScript ---
+*.tsbuildinfo
+next-env.d.ts
+
+# --- Coverage ---
+coverage/
+.nyc_output/
+
+# --- AI / Agent workspace ---
+.antigravity/
+.claude/
+.gemini/
+
+# --- Temporary debug files ---
+*.tmp
+error.log
 error.txt
+error2.log
+
+# --- OS ---
+Desktop.ini
+ehthumbs.db
+
+# --- Data files (local only) ---
+onyx-api/server_log.txt
+onyx-api/server_log_restart.txt
+
+# --- Temporary debug / fix scripts ---
+c1.json
+c1_curl.json
+c2_curl.json
+c3_curl.json
+c4_curl.json
+fix_acteurs.py
+onyx-api/zero_fake_data_validator.py
+onyx-dashboard/dashboard_old.txt
+onyx-dashboard/ioc_old.txt
+onyx-dashboard/fix.js
+onyx-dashboard/fix_all_quotes.js
+onyx-dashboard/fix_quotes.js
+onyx-dashboard/git_history.txt
+onyx-dashboard/patch_dashboard.py
+onyx-dashboard/update_sci.js

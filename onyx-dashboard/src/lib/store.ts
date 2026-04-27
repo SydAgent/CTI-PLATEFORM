@@ -21,6 +21,33 @@ interface DashboardStats {
   crawlers: Array<{ crawler_id: string; status: string; last_run?: string }>;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  TRUST UX: Data Freshness Tracking (Phase 2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type FreshnessState = 'fresh' | 'aging' | 'stale';
+
+/** Compute data freshness from timestamp */
+export function computeFreshness(lastSync: number): FreshnessState {
+  const age = Date.now() - lastSync;
+  if (age < 15_000) return 'fresh';   // <15s = fresh
+  if (age < 60_000) return 'aging';   // <60s = aging
+  return 'stale';                      // >60s = stale
+}
+
+/** Human-readable elapsed time */
+export function formatSyncAge(lastSync: number): string {
+  const age = Math.floor((Date.now() - lastSync) / 1000);
+  if (age < 5) return 'à l\'instant';
+  if (age < 60) return `il y a ${age}s`;
+  if (age < 3600) return `il y a ${Math.floor(age / 60)}min`;
+  return `il y a ${Math.floor(age / 3600)}h`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CORE STATE
+// ═══════════════════════════════════════════════════════════════════════════
+
 interface OnyxState {
   stats: DashboardStats | null;
   armedIocs: IOC[];
@@ -31,11 +58,22 @@ interface OnyxState {
   selectedActorId: string | null;
   isFeedPaused: boolean;
   feedBuffer: WSEvent[];
-  
+
+  // ── Trust UX: Sync Tracking ───────────────────────────────────────────
+  lastWsMessageAt: number;      // Timestamp of last WS message received
+  lastDataRefreshAt: number;    // Timestamp of last API data refresh
+  wsMessageCount: number;       // Total WS messages received in session
+  reconnectCount: number;       // Number of WS reconnections
+
+  // ── Focus Mode (Graph Investigation) ──────────────────────────────────
+  focusedEntityId: string | null;
+
+  // ── Actions ───────────────────────────────────────────────────────────
   setStats: (stats: DashboardStats | null) => void;
   setArmedIocs: (iocs: IOC[]) => void;
   setSelectedEventId: (id: string | null) => void;
   setSelectedActorId: (id: string | null) => void;
+  setFocusedEntityId: (id: string | null) => void;
   connectWebSocket: () => void;
   disconnectWebSocket: () => void;
   pauseFeed: () => void;
@@ -51,32 +89,50 @@ let isRafScheduled = false;
 let wsInstance: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 1000;
+// Ping interval stored at module level — avoids (ws as any) casts
+let pingIntervalId: ReturnType<typeof setInterval> | null = null;
 
 export const useOnyxStore = create<OnyxState>((set, get) => {
 
   const processBatch = () => {
+    const currentState = get();
     if (eventQueue.length === 0 && iocQueue.length === 0) {
       isRafScheduled = false;
       return;
     }
 
-    set((state) => {
+    // ── Déduplication stricte par clé composite source::type::value::(cveID|hash|id) ────────────────────────
+    const buildDedupKey = (ioc: IOC) => {
+      const extra = (ioc as any).cveID ?? (ioc as any).hash ?? (ioc as any).id ?? '';
+      return `${ioc.source}::${ioc.type}::${ioc.value}::${extra}`;
+    };
+
+    // Construire une Map des IOC existants indexés par clé composite
+    const existingMap = new Map<string, IOC>();
+    for (const ioc of currentState.armedIocs) {
+      existingMap.set(buildDedupKey(ioc), ioc);
+    }
+
+    // Filtrer les nouveaux IOCs — ne garder que ceux absents de la Map
+    const uniqueNewIocs: IOC[] = [];
+    for (const ioc of iocQueue) {
+      const key = buildDedupKey(ioc);
+      if (!existingMap.has(key)) {
+        existingMap.set(key, ioc); // prévient les doublons intra-batch
+        uniqueNewIocs.push(ioc);
+      }
+    }
+
+    set({
       // Keep feed fast: strictly up to 150 events
-      const newEvents = [...eventQueue.reverse(), ...state.events].slice(0, 150);
-      const newIocs = [...iocQueue.reverse(), ...state.armedIocs];
-      
-      const update = {
-        events: newEvents,
-        armedIocs: newIocs,
-        liveIocCount: state.liveIocCount + iocQueue.length,
-      };
-
-      eventQueue = [];
-      iocQueue = [];
-      isRafScheduled = false;
-
-      return update;
+      events: [...eventQueue.reverse(), ...currentState.events].slice(0, 150),
+      armedIocs: [...uniqueNewIocs.reverse(), ...currentState.armedIocs],
+      liveIocCount: currentState.liveIocCount + uniqueNewIocs.length,
     });
+
+    eventQueue = [];
+    iocQueue = [];
+    isRafScheduled = false;
   };
 
   const scheduleBatch = () => {
@@ -97,10 +153,20 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
     isFeedPaused: false,
     feedBuffer: [],
 
-    setStats: (stats) => set({ stats }),
-    setArmedIocs: (iocs) => set({ armedIocs: iocs }),
+    // Trust UX defaults
+    lastWsMessageAt: 0,
+    lastDataRefreshAt: Date.now(),
+    wsMessageCount: 0,
+    reconnectCount: 0,
+
+    // Focus Mode
+    focusedEntityId: null,
+
+    setStats: (stats) => set({ stats, lastDataRefreshAt: Date.now() }),
+    setArmedIocs: (iocs) => set({ armedIocs: iocs, lastDataRefreshAt: Date.now() }),
     setSelectedEventId: (id) => set({ selectedEventId: id }),
     setSelectedActorId: (id) => set({ selectedActorId: id }),
+    setFocusedEntityId: (id) => set({ focusedEntityId: id }),
 
     pauseFeed: () => set({ isFeedPaused: true }),
     resumeFeed: () => {
@@ -135,15 +201,14 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
           set({ connected: true });
           reconnectDelay = 1000;
           
-          const pingInterval = setInterval(() => {
+          pingIntervalId = setInterval(() => {
             if (wsInstance?.readyState === WebSocket.OPEN) {
               wsInstance.send(JSON.stringify({ type: 'ping' }));
             } else {
-              clearInterval(pingInterval);
+              if (pingIntervalId !== null) clearInterval(pingIntervalId);
+              pingIntervalId = null;
             }
           }, 15000);
-          
-          (wsInstance as any)._pingInterval = pingInterval;
         };
 
         wsInstance.onmessage = (event) => {
@@ -152,6 +217,13 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
             const rawMsg = JSON.parse(event.data);
             const msg = sanitizePayload(rawMsg);
             
+            // ── Trust UX: Track every message for freshness ──────────
+            const now = Date.now();
+            set(s => ({
+              lastWsMessageAt: now,
+              wsMessageCount: s.wsMessageCount + 1,
+            }));
+
             if (msg.channel === 'heartbeat' || msg.payload?.type === 'pong' || msg.channel === 'system') {
                set({ connected: true });
                return;
@@ -172,7 +244,6 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
             eventQueue.push(newEvent);
 
             if (newEvent.type === 'ioc_detected' && newEvent.data) {
-                // Instantly append WS IOCs so IOC Explorer sees it automatically via the atomic state updater
                 iocQueue.push(newEvent.data as unknown as IOC);
             }
 
@@ -184,10 +255,14 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
         };
 
         wsInstance.onclose = () => {
-          if ((wsInstance as any)?._pingInterval) {
-            clearInterval((wsInstance as any)._pingInterval);
+          if (pingIntervalId !== null) {
+            clearInterval(pingIntervalId);
+            pingIntervalId = null;
           }
-          set({ connected: false });
+          set(s => ({
+            connected: false,
+            reconnectCount: s.reconnectCount + 1,
+          }));
           wsInstance = null;
           
           reconnectTimer = setTimeout(() => {
@@ -211,11 +286,12 @@ export const useOnyxStore = create<OnyxState>((set, get) => {
 
     disconnectWebSocket: () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pingIntervalId !== null) {
+        clearInterval(pingIntervalId);
+        pingIntervalId = null;
+      }
       if (wsInstance) {
         wsInstance.onclose = null; // prevent auto-reconnect fallback
-        if ((wsInstance as any)._pingInterval) {
-          clearInterval((wsInstance as any)._pingInterval);
-        }
         wsInstance.close();
         wsInstance = null;
       }

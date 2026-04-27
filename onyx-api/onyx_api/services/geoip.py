@@ -18,10 +18,19 @@ import geoip2.database
 
 logger = get_logger(__name__)
 
-# Absolute local path resolution
+# Absolute local path resolution — search multiple candidate directories
 BASE_DIR = Path(__file__).parent.parent.parent
-ASSETS_DIR = BASE_DIR / "assets"
-DB_PATH = ASSETS_DIR / "GeoLite2-City.mmdb"
+_CANDIDATE_PATHS = [
+    BASE_DIR / "data" / "GeoLite2-City.mmdb",
+    BASE_DIR / "assets" / "GeoLite2-City.mmdb",
+    *(
+        [Path(os.environ["GEOIP_DB_PATH"])]
+        if os.environ.get("GEOIP_DB_PATH")
+        else []
+    ),
+]
+DB_PATH = next((p for p in _CANDIDATE_PATHS if p.exists()), _CANDIDATE_PATHS[0])
+ASSETS_DIR = DB_PATH.parent
 
 
 
@@ -62,10 +71,11 @@ class GeoIPResolver:
             logger.error("Failed to initialize GeoIP Reader", error=str(e))
 
     @classmethod
-    def resolve(cls, ip: str) -> dict[str, Any]:
+    async def resolve(cls, ip: str) -> dict[str, Any]:
         """
-        Synchronous, high-speed resolution (microseconds).
+        Asynchronous, high-speed resolution.
         Returns { latitude, longitude, country, city }
+
         
         HARDENED: NEVER returns None. If all resolution methods fail,
         assigns a deterministic fallback location based on IP hash.
@@ -92,6 +102,23 @@ class GeoIPResolver:
                 pass
             except Exception as e:
                 logger.warning(f"GeoIP DB lookup failed for {ip}", error=str(e))
+                
+        # ── Phase 2.5: ip-api.com Public API ──
+        try:
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                res = await client.get(f"http://ip-api.com/json/{ip}")
+                if res.status_code == 200:
+                    data = res.json()
+                    if data.get("status") == "success":
+                        return {
+                            "latitude": float(data.get("lat", 0.0)),
+                            "longitude": float(data.get("lon", 0.0)),
+                            "country": data.get("country", "Unknown"),
+                            "city": data.get("city", "Unknown")
+                        }
+        except Exception as e:
+            logger.warning(f"ip-api lookup failed for {ip}", error=str(e))
+
 
         # ── Phase 3: Deterministic prefix matching ──
         try:

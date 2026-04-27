@@ -76,9 +76,9 @@ function localExtract(text: string): AnalysisResult {
       const val = m[1] || m[0];
       if (seen.has(val.toLowerCase())) continue;
       seen.add(val.toLowerCase());
-      entities.push({ label, text: val, conf: conf - Math.random() * 0.05 });
+      entities.push({ label, text: val, conf: conf - (val.charCodeAt(0) % 5) * 0.01 });
       if (type !== 'ttp' && type !== 'tool') {
-        iocs.push({ type, value: val, confidence: Math.round((conf - Math.random() * 0.05) * 100) });
+        iocs.push({ type, value: val, confidence: Math.round((conf - (val.charCodeAt(0) % 5) * 0.01) * 100) });
       }
       if (type === 'ttp') {
         const base = val.split('.')[0];
@@ -88,7 +88,7 @@ function localExtract(text: string): AnalysisResult {
     }
   }
 
-  return { iocs, techniques, entities, processing_time_ms: Math.round(Math.random() * 40 + 8) };
+  return { iocs, techniques, entities, processing_time_ms: Math.round(text.length * 0.05 + 8) };
 }
 
 export default function NLPAnalyzer({ liveEvents = [] }: { liveEvents?: any[] }) {

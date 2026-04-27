@@ -1,88 +1,193 @@
-# ONYX CTI Platform — Project GENESIS 
+# 🛡️ ONYX CTI v3.0 Genesis
 
-<div align="center">
-  <img src="https://img.shields.io/badge/Status-Production--Ready-success?style=for-the-badge" alt="Status" />
-  <img src="https://img.shields.io/badge/Architecture-Zero--Trust-blue?style=for-the-badge" alt="Zero Trust" />
-  <img src="https://img.shields.io/badge/Security-DLP_%7C_RBAC-critical?style=for-the-badge" alt="Security" />
-  <img src="https://img.shields.io/badge/Performance-Sub--50ms-green?style=for-the-badge" alt="Performance" />
-</div>
+**Plateforme de Cyber Threat Intelligence (CTI) en temps réel**, conçue pour l'analyse opérationnelle et stratégique des menaces cyber, l'agrégation OSINT multi-sources, et la corrélation acteurs / campagnes / IOCs / vulnérabilités.
 
-<br/>
-
-**ONYX** is a sovereign, high-performance **Cyber Threat Intelligence (CTI)** platform engineered for enterprise Security Operations Centers (SOCs). Designed specifically to aggregate dark web telemetry, public OSINT feeds, and AI-driven semantic text extraction, ONYX delivers absolute geopolitical awareness within a secure, isolated containerized perimeter.
+![Status](https://img.shields.io/badge/status-active-brightgreen)
+![Next.js](https://img.shields.io/badge/Next.js-14-black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 ---
 
-## 🎯 Executive Summary
-Traditional intelligence feeds are plagued by latency, UI stalling, and lack of visual contextualization. **ONYX Project GENESIS** solves this by implementing an ultra-fast event-driven architecture. 
+## 🎯 Vue d'ensemble
 
-It provides real-time geospatial threat mapping (WebGL), multi-layered AI document analysis (SciBERT + Gemini), and high-resolution STIX 2.1 reporting engines natively equipped with Document Loss Prevention (DLP) watermarks.
+ONYX CTI agrège en temps réel **15+ sources OSINT gratuites** (URLhaus, ThreatFox, AlienVault OTX, MITRE ATT&CK, GDELT, CISA KEV, etc.) pour offrir :
 
-### Technical Achievements (Phase 1 to 8)
-- **Zero-Latency Ingestion Pipeline:** Replaced legacy SSE bindings with Bi-directional WebSockets routed through a **Redis Pub/Sub Event Bus**, allowing for sub-50ms propagation of IOCs.
-- **WebGL Threat Map Engine:** Over 100 simultaneous simulated attack vectors processed concurrently through an isolated **D3.js Web Worker** physics engine and rendered natively in **React Map GL**, averting browser memory leaks.
-- **Enterprise Report Generation:** A protected API (`RBAC Role.ANALYST`) outputs strict **STIX 2.1** profiles for SIEM imports natively. Client-side engines dynamically generate TLP-watermarked executive summaries.
-- **Offline GeoIP Resolution:** Hardened maxminddb implementation guarantees real-world IP geolocalization without HTTP 429 rate limit disruptions.
-
----
-
-## 🏗️ Architecture
-
-The ONYX platform embraces an asynchronous Microservice layout built upon isolated stateless components:
-
-### 1. The Core API (FastAPI)
-- **Engine**: Python 3.11 asynchronous ASGI (Uvicorn).
-- **Responsibilities**: Tor proxy rotation, OSINT connectors (AlienVault OTX, MITRE TAXII STIX caching), Semantic analysis dispatch (*SciBERT*), and WebSocket bridging.
-- **Performance**: Natively protected by *Stale-While-Revalidate* cache strategies to prevent DDOS and External Feed timeouts.
-
-### 2. The Data Layer (Redis)
-- **Engine**: Redis 7 Alpine.
-- **Responsibilities**: Acts as the strict intermediary for the WebSocket stream broadcast. It buffers all API telemetry responses, keeping the Dashboard fully synchronized cross-session. *Isolated securely on an internal-only Docker network.*
-
-### 3. The Dashboard (Next.js 14)
-- **Engine**: React 18, Zustand, WebGL Deck.gl.
-- **Responsibilities**: Replaces heavy Redux boilerplate with atomic **Zustand** subscriptions. Batches High-Frequency Trading (HFT) volume IOC streams into `requestAnimationFrame` boundaries yielding an unbreakable **60 FPS** GUI experience.
+- 📊 **Tableau de bord stratégique** avec score de risque global, alertes prioritaires, top acteurs
+- 🌍 **Matrice géopolitique interactive** (deck.gl) avec arcs de manœuvre entre pays
+- 🕸️ **Graphe de menaces** dynamique (Cytoscape.js) avec relations acteurs/malwares/CVEs/IOCs
+- 🔍 **Explorateur IOC** avec filtres avancés
+- 🎭 **Analyse d'acteurs de la menace** (MITRE ATT&CK + corrélations OTX)
+- 🧠 **Moteur sémantique SciBERT** pour l'analyse de contenu
+- 📄 **Export STIX 2.1** conforme OASIS
+- 🛡️ **Plans de remédiation contextuels**
 
 ---
 
-## 🛡️ Getting Started (One-Click Deploy)
+## 🏗️ Stack technique
 
-The platform has been dockerized for immediate sovereign deployment via multi-stage optimized images. 
+| Couche | Technologies |
+|---|---|
+| Framework | Next.js 14 (App Router) |
+| Langage | TypeScript strict |
+| Backend | FastAPI (Python 3.11+) |
+| Cartographie | MapLibre GL + deck.gl |
+| Graphes | Cytoscape.js (dagre, cose-bilkent, breadthfirst) |
+| Charts | Recharts |
+| State | useSyncExternalStore (React 18) |
+| Style | Tailwind CSS + tokens CSS variables (light/dark) |
+| NLP | SciBERT (allenai/scibert_scivocab_uncased) |
+| AI/RAG | Gemini 2.5 Flash + Qdrant Vector Store |
+| Infrastructure | Docker Compose, Elasticsearch, MongoDB, Redis |
 
-### Prerequisites
-- Docker Engine & Docker Compose (v2)
-- Access to AlienVault OTX API keys (Optional but highly recommended)
+---
 
-### Deployment
+## 🌐 Sources OSINT intégrées
 
-1. **Clone the Repository and Configure Secrets**
+### Sans clé API (immédiatement opérationnelles)
+- **CISA KEV** — Vulnérabilités activement exploitées
+- **GDELT DOC + GEO 2.0** — Événements géopolitiques mondiaux
+- **MITRE ATT&CK** — Référentiel acteurs / TTPs
+- **OpenPhish** — URLs de phishing
+- **Tor Exit Nodes** — IPs suspectes
+- **NVD** — Base nationale CVE (rate limité)
+- **CIRCL OSINT** — Feeds MISP communautaires
+- **ReliefWeb (ONU)** — Crises humanitaires
+
+### Avec clé API gratuite
+- **URLhaus / ThreatFox / MalwareBazaar** (abuse.ch — clé unifiée)
+- **AlienVault OTX** — Pulses & adversaires
+- **AbuseIPDB** — Réputation IP
+- **VirusTotal** — Analyse de fichiers (limites strictes en gratuit)
+
+---
+
+## 🚀 Installation
+
+### Prérequis
+- Node.js ≥ 18.17
+- npm ≥ 9 (ou yarn/pnpm)
+- Python 3.11+ (pour le backend)
+- Docker & Docker Compose (pour l'infrastructure)
+
+### Étapes
+
 ```bash
-git clone https://github.com/organization/onyx-cti.git
-cd onyx-cti
+# 1. Cloner le dépôt
+git clone https://github.com/Amalkaraoud/CTI-Platform-.git
+cd CTI-Platform-
+
+# 2. Configurer les variables d'environnement
 cp .env.example .env
-```
-*(Enter your `OSINT_ALIENVAULT_OTX_KEY` inside the `.env` if available)*
+# Éditer .env et renseigner les clés API obtenues
 
-2. **Launch the Container Cluster**
-```bash
-docker-compose up --build -d
-```
-Docker will natively download the lightweight `alpine` and `slim` bases, compile the frontend into Next.js _standalone mode_ (drastically reducing node_modules volume), and orchestrate the isolated networks.
+# 3. Lancer l'infrastructure (Elasticsearch, MongoDB, Redis, Tor)
+docker-compose up -d
 
-3. **Logistics & Interfaces**
-- **Dashboard GUI:** [http://localhost:3000](http://localhost:3000)
-- **API Swagger / Redoc:** [http://localhost:8000/docs](http://localhost:8000/docs)
+# 4. Installer et lancer le dashboard
+cd onyx-dashboard
+npm install
+npm run dev
+
+# 5. Installer et lancer le backend API
+cd ../onyx-api
+pip install -e ../onyx-core
+pip install -e .
+uvicorn onyx_api.main:app --reload --port 8000
+```
+
+La plateforme est accessible sur `http://localhost:3000`.
 
 ---
 
-## 📋 Security & Compliance (DevSecOps)
+## 🔑 Obtention des clés API gratuites
 
-- **Isolated Storage**: Redis bindings are completely severed from the external bridge (`onyx_secure_backend` exclusively intercepts FastAPI workers).
-- **JWT & Role-Based Access (RBAC)**: Reports execution requires explicitly tagged Bearer tokens payload. Unlicensed exports trigger strict HTTP 403 blocks.
-- **DOMPurify & Payload Sanitization**: The RAG/SciBERT output stream rigorously filters nested scripts protecting analyst browsers from Cross-Site Scripting (XSS) vectors via infected logs.
-- **DLP Export Marking**: Executive `.PDF` conversions force-inject diagonal opacity TLP tags mapped to UTC timestamps neutralizing document spoofing.
+| Source | URL d'inscription | Délai |
+|---|---|---|
+| abuse.ch (URLhaus, ThreatFox, MB) | https://auth.abuse.ch/ | 5 min |
+| AlienVault OTX | https://otx.alienvault.com/ | 5 min |
+| AbuseIPDB | https://www.abuseipdb.com/register | 5 min |
+| VirusTotal | https://www.virustotal.com/gui/join-us | 10 min |
+| NVD (optionnel) | https://nvd.nist.gov/developers/request-an-api-key | Instantané |
 
-<br/>
+---
 
-> **Engineering Sign-off:** Architecture Validated - Phase 8 Complete.
-> *"A Sovereign Weapon in the hands of the Analyst."*
+## 📂 Architecture du projet
+
+```
+├── onyx-dashboard/              # Frontend Next.js 14
+│   ├── src/
+│   │   ├── app/                 # Routes (App Router)
+│   │   │   └── api/proxy/       # Proxy CORS unifié
+│   │   ├── components/          # Composants React
+│   │   │   ├── ExecutiveDashboard.tsx
+│   │   │   ├── ThreatMap3D.tsx  # Matrice géopolitique deck.gl
+│   │   │   ├── ThreatGraph.tsx  # Graphe Cytoscape.js
+│   │   │   ├── ActeursMenace.tsx
+│   │   │   ├── IoCTable.tsx
+│   │   │   └── ...
+│   │   ├── lib/
+│   │   │   ├── connectors/      # 15+ connecteurs OSINT
+│   │   │   ├── stix/            # Export STIX 2.1
+│   │   │   ├── RealTimeDataService.ts
+│   │   │   └── store.ts
+│   │   └── styles/
+│   │       └── globals.css      # Thème light/dark via tokens CSS
+│   └── tailwind.config.js
+│
+├── onyx-api/                    # Backend FastAPI
+│   └── onyx_api/
+│       ├── routers/             # Endpoints REST
+│       ├── services/            # Logique métier (OSINT, RAG, NLP)
+│       └── workers/             # Tâches asynchrones (Celery)
+│
+├── onyx-core/                   # Modèles & services partagés
+│   └── onyx_core/
+│       ├── models/              # STIX, IoC, Threat Actor
+│       └── services/            # ES, MongoDB, Redis, Scoring
+│
+├── onyx-nlp/                    # Pipeline NLP (SciBERT, spaCy)
+├── onyx-crawlers/               # Crawlers darkweb / clearweb
+├── onyx-connectors/             # Connecteurs externes
+├── onyx-analyzers/              # Analyseurs de menaces
+├── infra/                       # Config Docker (ES, Mongo, Tor)
+├── docker-compose.yml
+├── .env.example
+└── README.md
+```
+
+---
+
+## 🛡️ Sécurité
+
+- ✅ Clés API stockées exclusivement en variables d'environnement (jamais dans le code)
+- ✅ Toutes les requêtes externes passent par un proxy serveur (`/api/proxy/[source]`) → pas de clés exposées côté client
+- ✅ Validation des entrées et sanitization sur les composants critiques
+- ✅ Guardrails AI activés (input/output length limits, content filtering)
+- ✅ `.env` et `.env.local` exclus du repo via `.gitignore`
+- ✅ Tor proxy intégré pour les crawlers darkweb avec circuit rotation
+
+---
+
+## 📊 Conformité & Standards
+
+- **STIX 2.1** : export conforme OASIS pour interopérabilité avec MISP, OpenCTI, etc.
+- **MITRE ATT&CK** : référentiel acteurs / techniques / tactiques
+- **WCAG AA** : contraste validé sur les modes clair et sombre
+
+---
+
+## 📝 Licence
+
+MIT — voir [LICENSE](LICENSE)
+
+---
+
+## 👤 Auteur
+
+**Amal Karaoud**
+GitHub: [@Amalkaraoud](https://github.com/Amalkaraoud)
+
+---
+
+*Plateforme développée dans le cadre d'un projet de cybersécurité, intégrant les meilleures pratiques de l'industrie pour la threat intelligence opérationnelle.*

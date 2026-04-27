@@ -6,17 +6,17 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 const TACTICS = [
   { id: 'reconnaissance',       name: 'Reconnaissance',       shortName: 'RECON' },
-  { id: 'resource-development',  name: 'Resource Development',  shortName: 'RES.DEV' },
-  { id: 'initial-access',        name: 'Initial Access',        shortName: 'INIT.ACC' },
-  { id: 'execution',             name: 'Execution',             shortName: 'EXEC' },
-  { id: 'persistence',           name: 'Persistence',           shortName: 'PERSIST' },
-  { id: 'privilege-escalation',  name: 'Privilege Escalation',  shortName: 'PRIV.ESC' },
-  { id: 'defense-evasion',       name: 'Defense Evasion',       shortName: 'DEF.EVA' },
-  { id: 'credential-access',     name: 'Credential Access',     shortName: 'CRED.ACC' },
-  { id: 'discovery',             name: 'Discovery',             shortName: 'DISC' },
-  { id: 'lateral-movement',      name: 'Lateral Movement',      shortName: 'LAT.MOV' },
-  { id: 'collection',            name: 'Collection',            shortName: 'COLL' },
-  { id: 'command-and-control',   name: 'Command & Control',     shortName: 'C&C' },
+  { id: 'resource-development',  name: 'Développement Ressources',  shortName: 'DEV.RES' },
+  { id: 'initial-access',        name: 'Accès Initial',        shortName: 'ACC.INIT' },
+  { id: 'execution',             name: 'Exécution',             shortName: 'EXEC' },
+  { id: 'persistence',           name: 'Persistance',           shortName: 'PERSIST' },
+  { id: 'privilege-escalation',  name: 'Élévation Privilèges',  shortName: 'ELEV.PRIV' },
+  { id: 'defense-evasion',       name: 'Évasion Défense',       shortName: 'EVASION' },
+  { id: 'credential-access',     name: 'Accès Identifiants',     shortName: 'ACC.ID' },
+  { id: 'discovery',             name: 'Découverte',             shortName: 'DECOUV' },
+  { id: 'lateral-movement',      name: 'Mouvement Latéral',      shortName: 'MOUV.LAT' },
+  { id: 'collection',            name: 'Collecte',            shortName: 'COLL' },
+  { id: 'command-and-control',   name: 'Commande & Contrôle',     shortName: 'C&C' },
   { id: 'exfiltration',          name: 'Exfiltration',          shortName: 'EXFIL' },
   { id: 'impact',                name: 'Impact',                shortName: 'IMPACT' },
 ];
@@ -139,17 +139,17 @@ export default function AttackMatrix() {
           onClick={() => setBriefingExpanded(!briefingExpanded)}
         >
           <h3 className="font-bold text-[#00eeff] flex items-center gap-2">
-            <span className="text-xl">🛡</span> Intelligence Briefing & MITRE Heatmap
+            <span className="text-xl">🛡</span> Synthèse de Renseignement & Heatmap MITRE
           </h3>
-          <span className="text-[#94a3b8] text-xs font-mono">{briefingExpanded ? '▲ COLLAPSE' : '▼ EXPAND'}</span>
+          <span className="text-[#94a3b8] text-xs font-mono">{briefingExpanded ? '▲ FERMER' : '▼ ÉTENDRE'}</span>
         </div>
         {briefingExpanded && (
           <div className="p-4 text-sm text-[#cbd5e1] flex flex-col gap-3">
             <p>
-              <strong className="text-white">Expert Context:</strong> This matrix dynamically aggregates live IOC metadata mapping it to the MITRE ATT&CK Enterprise framework. Cellular hue intensity directly correlates to the aggregate severity and frequency of techniques extracted via NLP and OSINT real-time inference over the last 24 hours.
+              <strong className="text-white">Contexte Expert :</strong> Cette matrice agrège dynamiquement les métadonnées IOC en direct en les mappant sur le framework MITRE ATT&CK Enterprise. L'intensité de la couleur cellulaire est directement corrélée à la gravité et à la fréquence globales des techniques extraites via NLP et par inférence en temps réel de l'OSINT sur les 24 dernières heures.
             </p>
             <p className="text-xs text-[#94a3b8] border-l-2 border-[#00eeff] pl-3 py-1">
-              <strong className="text-white">Beginner Guide:</strong> Think of the columns as the "Goals" a hacker has (like getting in, hiding, or stealing data), and the cells as the specific "Techniques" they use to achieve those goals. Red glowing cells mean we are detecting these techniques <em>right now</em> on our network or in global threat feeds.
+              <strong className="text-white">Guide Novice :</strong> Considérez les colonnes de cette carte comme les "Objectifs" d'un hacker (comme pénétrer, se cacher ou voler des données), et les cellules correspondantes aux "Techniques" spécifiques qu'ils utilisent. Les zones lumineuses rouges signifient que nous détectons ces techniques <em>actuellement en direct</em> sur notre réseau ou dans le monde.
             </p>
           </div>
         )}
@@ -159,13 +159,13 @@ export default function AttackMatrix() {
       <div className="flex justify-between items-end bg-[#050a0f] p-3 rounded border border-[#1e293b]">
         <div className="flex items-center gap-4">
           <div>
-            <div className="text-[10px] uppercase text-[#64748b] font-bold mb-1">Threat Actor Overlay</div>
+            <div className="text-[10px] uppercase text-[#64748b] font-bold mb-1">Superposition Acteur de Menace</div>
             <select 
               value={selectedTA} 
               onChange={(e) => setSelectedTA(e.target.value)}
               className="bg-[#0f172a] border border-[#334155] text-white text-xs px-3 py-1.5 rounded outline-none w-48 font-mono"
             >
-              <option value="none">-- Select Actor to Overlay --</option>
+              <option value="none">-- Sélectionner Acteur --</option>
               {threatActors.map(ta => (
                 <option key={ta.id} value={ta.id}>{ta.name} ({ta.description})</option>
               ))}
@@ -174,20 +174,20 @@ export default function AttackMatrix() {
           {selectedTA !== 'none' && (
             <div className="px-3 py-1 bg-purple-900/20 border border-purple-500/40 rounded text-[10px] text-purple-300 font-mono flex items-center h-8 mt-4">
               <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse mr-2 shadow-[0_0_8px_#a855f7]"></span>
-              Hypothesis Overlay Active
+              Hypothèse Active
             </div>
           )}
         </div>
         
         {/* Heat scale legend */}
         <div className="flex items-center gap-2 text-[10px] text-[#64748b]">
-          <span>Low Detections</span>
+          <span>Faible Activité</span>
           <div className="flex gap-0.5">
             {[0, 0.3, 0.5, 0.7, 0.9].map((i) => (
               <div key={i} className="w-4 h-2.5 rounded-sm" style={{ background: heatColor(i * 100, 100) }} />
             ))}
           </div>
-          <span>High Detections</span>
+          <span>Forte Activité</span>
         </div>
       </div>
 
