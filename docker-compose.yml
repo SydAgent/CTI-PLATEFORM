@@ -16,6 +16,45 @@ services:
       timeout: 3s
       retries: 3
 
+  postgres:
+    image: postgres:15-alpine
+    container_name: onyx_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: onyx_cti
+      POSTGRES_USER: ${POSTGRES_USER:-onyx_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-onyx_pg_secret_2026}
+    expose:
+      - "5432"
+    networks:
+      - onyx_secure_backend
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-onyx_admin} -d onyx_cti"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: onyx_neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-onyx_graph_secret_2026}
+    expose:
+      - "7687"
+      - "7474"
+    networks:
+      - onyx_secure_backend
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:7474"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+
   backend:
     build:
       context: .
@@ -30,6 +69,10 @@ services:
       - STANDALONE_MODE=true
       - REDIS_HOST=redis
       - REDIS_PASSWORD=${REDIS_PASSWORD:-onyx_redis_secret_2026}
+      - POSTGRES_URL=postgresql://${POSTGRES_USER:-onyx_admin}:${POSTGRES_PASSWORD:-onyx_pg_secret_2026}@postgres:5432/onyx_cti
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=${NEO4J_USER:-neo4j}
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD:-onyx_graph_secret_2026}
       - OSINT_ALIENVAULT_OTX_KEY=${OSINT_ALIENVAULT_OTX_KEY:-}
       # Additional environment configurations inherited from .env
     env_file:
@@ -39,6 +82,10 @@ services:
       - onyx_frontend_bridge
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
 
   frontend:
@@ -63,3 +110,7 @@ networks:
     name: onyx_secure_backend
   onyx_frontend_bridge:
     name: onyx_frontend_bridge
+
+volumes:
+  postgres_data:
+  neo4j_data:
