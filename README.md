@@ -183,8 +183,8 @@ MIT — voir [LICENSE](LICENSE)
 
 ---
 
-## 👤 Auteur
-
+## 👤 Auteurs
+**Mahdi Ghozzi**
 **Amal Karaoud**
 GitHub: [@Amalkaraoud](https://github.com/Amalkaraoud)
 
