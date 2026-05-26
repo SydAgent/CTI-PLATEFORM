@@ -1,0 +1,109 @@
+
+\section{Tolérance aux pannes et Orchestration Asynchrone}
+
+La fiabilité d'une plateforme de renseignement opérationnel se mesure à sa capacité à maintenir la disponibilité du service sous charge soutenue --- typiquement $10^3$ indicateurs de compromission ingérés par seconde lors d'une vague de publication simultanée par les flux OSINT --- tout en absorbant les défaillances individuelles de composants sans perte de données. Nous avons conçu l'architecture d'ONYX selon un paradigme de tolérance aux pannes (\textit{Fail-Safe}) fondé sur la ségrégation stricte entre les opérations liées aux entrées-sorties (\textit{I/O-bound}) et les opérations liées au calcul intensif (\textit{CPU-bound}). Nous démontrons dans cette section que cette ségrégation garantit l'absence de point unique de défaillance sur le chemin critique du traitement.
+
+\subsection{Modèle de concurrence I/O-Bound : FastAPI, Uvicorn et le protocole ASGI}
+
+\subsubsection{Le protocole ASGI et la boucle événementielle}
+
+Comme justifié au Chapitre~II (section~II.2.a), le serveur d'application repose sur FastAPI exécuté par Uvicorn. Uvicorn implémente le protocole ASGI (\textit{Asynchronous Server Gateway Interface}), successeur asynchrone du protocole WSGI historique. Là où WSGI traite chaque requête de manière synchrone et séquentielle --- un fil d'exécution par requête, bloqué pendant toute la durée du traitement --- ASGI expose une interface fondée sur des coroutines Python (\texttt{async def}) qui peuvent être suspendues et reprises au gré des opérations d'entrée-sortie.
+
+Le moteur d'exécution sous-jacent est la boucle événementielle \texttt{uvloop} (implémentation C de \texttt{asyncio}), qui pilote un multiplexeur d'entrées-sorties via l'appel système \texttt{epoll} (Linux) ou \texttt{kqueue} (macOS/BSD). Ce multiplexeur surveille simultanément l'ensemble des descripteurs de fichier ouverts --- sockets réseau vers les clients HTTP, connexions vers MongoDB, Elasticsearch, Redis, et sockets WebSocket --- et notifie la boucle événementielle dès qu'un descripteur est prêt pour une opération de lecture ou d'écriture. Ce mécanisme permet à un processus unique de gérer simultanément des milliers de connexions concurrentes sans recourir au multi-threading, éliminant ainsi les problèmes classiques de verrous (\textit{locks}), de conditions de concurrence (\textit{race conditions}) et d'interblocages (\textit{deadlocks}).
+
+\subsubsection{Architecture à blocage nul (\textit{Zero-Blocking Architecture})}
+
+Le principe fondamental de notre architecture I/O-bound est le suivant : \textbf{aucune opération d'entrée-sortie réseau ne bloque le fil d'exécution principal}. Chaque interaction avec un service externe est implémentée comme une coroutine asynchrone qui cède le contrôle à la boucle événementielle via le mot-clé \texttt{await} pendant l'attente de la réponse.
+
+Considérons le flux de traitement d'une requête API typique --- la recherche d'un indicateur de compromission par valeur :
+
+\begin{enumerate}
+    \item Uvicorn reçoit la requête HTTP et l'achemine vers le gestionnaire FastAPI correspondant (\texttt{async def get\_ioc(value: str)}).
+    \item Le gestionnaire émet une requête vers Elasticsearch (\texttt{await es.search(...)}) pour la recherche textuelle. Pendant l'attente de la réponse réseau (typiquement 2 à 15~ms), la coroutine est suspendue et la boucle événementielle peut traiter d'autres requêtes entrantes.
+    \item À la réception de la réponse Elasticsearch, la coroutine reprend, enrichit le résultat par une interrogation de Redis (\texttt{await redis.cache\_get(...)}) pour récupérer le score de déclin en cache. Nouvelle suspension pendant l'aller-retour réseau ($<1$~ms pour Redis in-memory).
+    \item Le résultat complet est sérialisé en JSON via ORJSON (sérialiseur compilé en Rust, 3 à 10 fois plus rapide que le module \texttt{json} standard) et retourné au client.
+\end{enumerate}
+
+Durant ce flux, le fil d'exécution principal n'est jamais bloqué par une attente réseau. Le temps total de blocage effectif est limité aux opérations CPU pures --- sérialisation JSON, validation Pydantic, construction de la réponse --- qui représentent typiquement moins de 5~\% du temps de traitement total d'une requête.
+
+Notre implémentation du cycle de vie applicatif (\texttt{lifespan}) illustre cette architecture à plus grande échelle : au démarrage, les services de base de données sont initialisés de manière asynchrone (\texttt{await es.initialize()}, \texttt{await mongo.initialize()}, \texttt{await redis.initialize()}), puis cinq tâches d'ingestion en temps réel sont lancées comme coroutines concurrentes via \texttt{asyncio.create\_task()} --- le poller OSINT, l'ingesteur géopolitique, le moteur de rapports dynamiques NLP, la boucle de recalcul des scores de déclin et la boucle d'apprentissage des demi-vies. Chacune de ces tâches opère de manière indépendante dans la boucle événementielle, sans bloquer le traitement des requêtes API entrantes, et sans contention de verrous entre elles.
+
+\subsection{Délégation CPU-Bound : Celery Workers et Redis comme Courtier de Messages}
+
+Les opérations de calcul intensif --- inférence du modèle SciBERT (vectorisation d'un rapport en $\mathbb{R}^{768}$), traversée de graphes profonds dans Neo4j, recalcul de masse des scores de déclin sur $10^5$ indicateurs --- ne peuvent pas être exécutées dans la boucle événementielle sans conséquences critiques. Une opération CPU-bound de 500~ms bloquerait le fil unique d'Uvicorn, suspendant le traitement de toutes les requêtes API concurrentes et des WebSockets actifs pendant cette durée. À un débit de 200 requêtes par seconde, cela produirait une file d'attente de 100 requêtes en attente --- un effondrement de performance inacceptable pour un usage opérationnel.
+
+Nous avons résolu cette contrainte par la délégation systématique des charges CPU-bound vers des processus de travail Celery (\textit{Celery Workers}) exécutés dans des processus distincts, avec Redis comme courtier de messages (\textit{Message Broker}).
+
+\subsubsection{Redis comme courtier de messages in-memory}
+
+Redis opère intégralement en mémoire volatile avec une politique d'éviction LRU (\textit{Least Recently Used}) et sert simultanément trois fonctions architecturales dans notre plateforme :
+
+\begin{enumerate}
+    \item \textbf{Courtier de messages Celery} : Redis reçoit les tâches soumises par l'API sous forme de messages sérialisés en JSON, les stocke dans quatre files d'attente nommées et ségrégées par domaine fonctionnel (\texttt{crawlers}, \texttt{nlp}, \texttt{analysis}, \texttt{default}), et les distribue aux processus de travail abonnés à chaque file selon une politique FIFO (\textit{First In, First Out}). La latence d'enfilement est inférieure à 0{,}1~ms grâce au stockage in-memory, ce qui garantit que la soumission d'une tâche depuis l'API ne produit aucun blocage perceptible.
+    \item \textbf{Stockage des résultats} : les résultats des tâches asynchrones sont persistés dans Redis avec un temps d'expiration configurable, permettant au client de récupérer le résultat à tout moment après la soumission via l'identifiant de tâche Celery.
+    \item \textbf{Bus d'événements temps réel} : les Redis Streams servent de bus de publication-abonnement (\textit{pub/sub}) pour la diffusion des événements système (nouvelles détections d'IoC, résultats d'extraction NLP, alertes géopolitiques, changements d'état de déclin) vers les consommateurs WebSocket connectés aux tableaux de bord.
+\end{enumerate}
+
+Le routage des tâches est implémenté par espace de noms : toutes les tâches du module \texttt{onyx\_crawlers} sont automatiquement acheminées vers la file \texttt{crawlers}, les tâches \texttt{onyx\_nlp} vers la file \texttt{nlp} et les tâches \texttt{onyx\_analyzers} vers la file \texttt{analysis}. Cette ségrégation par file garantit qu'une surcharge de tâches de collecte --- par exemple, lors du lancement simultané de 50 crawlers Dark Web --- ne bloque jamais les tâches d'analyse NLP, et inversement. Chaque file peut être dimensionnée indépendamment par ajout de processus de travail dédiés, assurant l'extensibilité horizontale exigée par l'exigence non fonctionnelle ENF-3 du Chapitre~I.
+
+L'ordonnanceur périodique Celery Beat complète cette architecture en déclenchant automatiquement les tâches récurrentes : surveillance de Pastebin toutes les 5 minutes, surveillance de GitHub toutes les 10 minutes, recalcul des scores de déclin toutes les heures et rafraîchissement du cache du tableau de bord toutes les 30 secondes.
+
+\subsubsection{Tolérance aux pannes par acquittement tardif (\texttt{task\_acks\_late})}
+
+La configuration \texttt{task\_acks\_late = True} de Celery constitue la pierre angulaire de notre stratégie de tolérance aux pannes pour les tâches distribuées. Dans le mode par défaut (\texttt{task\_acks\_late = False}), un message est acquitté dès sa réception par le processus de travail, \textit{avant} l'exécution de la tâche. Si le processus subit une terminaison imprévue --- arrêt brutal du conteneur Docker, erreur de segmentation dans une bibliothèque C native, épuisement mémoire par le modèle SciBERT --- le message est définitivement perdu, car le courtier le considère comme traité.
+
+Avec \texttt{task\_acks\_late = True}, le message n'est acquitté qu'après l'exécution complète et réussie de la tâche. En cas de terminaison imprévue du processus de travail, le message non acquitté est automatiquement réinjecté dans la file d'attente par Redis et redistribué à un autre processus de travail disponible. Ce mécanisme garantit la propriété \textit{at-least-once delivery} : chaque tâche est exécutée au moins une fois, même en cas de défaillance matérielle d'un n\oe ud de calcul.
+
+Le paramètre complémentaire \texttt{worker\_prefetch\_multiplier = 1} empêche chaque processus de travail de pré-extraire plus d'un message à la fois, limitant ainsi le nombre de tâches potentiellement perdues en cas de crash à exactement une --- qui sera de toute façon redistribuée grâce à l'acquittement tardif.
+
+\subsubsection{Résilience réseau par tentatives exponentielles (\textit{Exponential Backoff})}
+
+Les interruptions transitoires de connectivité réseau entre les services --- redémarrage d'un conteneur MongoDB, reconfiguration réseau d'Elasticsearch, saturation temporaire d'un pool de connexions --- constituent un scénario opérationnel courant dans un environnement conteneurisé. Une stratégie de reconnexion naïve (tentative immédiate, échec, tentative immédiate, échec) produit un phénomène d'avalanche (\textit{thundering herd}) : tous les clients tentent de se reconnecter simultanément, saturant le service à peine rétabli.
+
+Nous avons implémenté une stratégie de tentatives exponentielles (\textit{exponential backoff}) via la bibliothèque \texttt{tenacity}, appliquée à toutes les initialisations de services critiques. La configuration retenue est la suivante :
+
+\begin{lstlisting}[language=Python, caption={Résilience réseau par tentatives exponentielles via \texttt{tenacity}.}, label={lst:backoff}]
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+@retry(
+    stop=stop_after_attempt(5),
+    wait=wait_exponential(multiplier=2, max=30),
+)
+async def initialize(self) -> None:
+    """
+    Initialisation du service MongoDB avec resilience.
+    Strategie : 5 tentatives, delai exponentiel.
+
+    Sequence de delais :
+      Tentative 1 : echec -> attente 2s
+      Tentative 2 : echec -> attente 4s
+      Tentative 3 : echec -> attente 8s
+      Tentative 4 : echec -> attente 16s
+      Tentative 5 : echec -> attente 30s (plafond)
+
+    Duree totale maximale avant abandon : 60s.
+    """
+    info = await self._client.server_info()
+    logger.info(
+        "MongoDB connected: version=%s",
+        info.get("version"),
+    )
+\end{lstlisting}
+
+Le délai entre la $k$-ième tentative et la suivante est calculé par $d_k = \min(2^k, 30)$ secondes, produisant la séquence $\{2, 4, 8, 16, 30\}$. La durée totale maximale avant abandon est de 60 secondes, ce qui absorbe la très grande majorité des interruptions transitoires (redémarrage d'un conteneur : 5 à 15 secondes; reconfiguration réseau : 10 à 30 secondes) tout en garantissant une détection rapide des défaillances permanentes.
+
+\subsubsection{Dégradation gracieuse et isolation des défaillances}
+
+Notre architecture garantit la propriété de \textbf{dégradation gracieuse} (\textit{graceful degradation}) : en cas d'indisponibilité d'un service non critique, la plateforme continue de fonctionner en mode dégradé plutôt que de s'arrêter entièrement. L'initialisation de chaque service au démarrage est encapsulée dans un bloc \texttt{try/except} indépendant : si Qdrant est indisponible, les fonctionnalités de recherche sémantique sont désactivées mais l'API REST, la recherche textuelle Elasticsearch et l'ingestion d'indicateurs continuent de fonctionner. Si le moteur de géolocalisation GeoIP ne s'initialise pas, les indicateurs sont ingérés sans enrichissement géographique.
+
+Cette isolation des défaillances est renforcée par la ségrégation des files de tâches Celery : un incident dans le module de collecte (\textit{crawlers}) --- par exemple, l'indisponibilité du proxy Tor --- n'affecte ni l'API, ni le moteur d'analyse NLP, ni les files d'export TAXII. Chaque domaine fonctionnel opère dans un compartiment étanche, connecté aux autres exclusivement par le bus d'événements Redis.
+
+\bigskip
+\noindent\rule{\textwidth}{0.4pt}
+\bigskip
+
+La conjonction des cinq piliers techniques exposés dans ce chapitre --- acquisition furtive avec sécurité opérationnelle intégrée (section~3.1), pipeline ETL normalisé selon le standard STIX~2.1 (section~3.2), intelligence artificielle sémantique par extraction NER et vectorisation SciBERT (section~3.3), modélisation par graphe de menace avec moteur de déclin paramétré (section~3.4) et orchestration asynchrone tolérante aux pannes (section~3.5) --- forme une chaîne de traitement cohérente qui transforme le signal brut, issu de sources hétérogènes et potentiellement hostiles, en renseignement contextualisé, corrélé et immédiatement exploitable par les équipes de défense. Nous détaillons, dans le chapitre suivant, les interfaces de restitution et les mécanismes de visualisation qui permettent aux analystes d'exploiter ce renseignement : le tableau de bord React, la cartographie géospatiale, l'assistant conversationnel fondé sur l'intelligence artificielle générative et les mécanismes d'exportation vers les écosystèmes SIEM partenaires.

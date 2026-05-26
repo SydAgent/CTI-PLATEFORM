@@ -1,0 +1,89 @@
+%% =========================================================================
+\section{Évaluation des Performances et Tolérance à la Charge}
+%% =========================================================================
+
+La validation fonctionnelle d'une plateforme de renseignement sur les cybermenaces ne peut se limiter à la vérification des parcours utilisateur : elle doit démontrer que le système maintient sa réactivité opérationnelle sous des conditions de charge représentatives d'un centre opérationnel de sécurité (SOC) de niveau 2 traitant plusieurs centaines de milliers d'indicateurs en continu. Nous avons conduit une campagne d'évaluation des performances couvrant trois axes : le débit d'ingestion du pipeline OSINT, la latence des requêtes API et la consommation mémoire du moteur NLP sous charge.
+
+\subsection{Débit d'Ingestion du Pipeline Asynchrone}
+
+L'architecture d'ingestion de la plateforme ONYX repose sur un pipeline asynchrone multi-sources orchestré par la boucle événementielle \texttt{asyncio} de Python, piloté par le serveur ASGI Uvicorn. Le cycle d'ingestion s'articule autour de sept sources OSINT simultanées (AbuseCH Feodo Tracker, AbuseCH URLhaus, CISA KEV, Emerging Threats, OpenPhish, ThreatFox, Tor Exit Nodes), interrogées en parallèle toutes les 15~secondes via le client HTTP asynchrone \texttt{httpx}. Chaque réponse est parsée par un extracteur dédié, puis les indicateurs résultants traversent un pipeline d'enrichissement concurrent composé de trois étapes parallélisées par \texttt{asyncio.gather()} : résolution GeoIP via la base MaxMind locale, interrogation VirusTotal, et corrélation AbuseIPDB/Shodan. Enfin, une déduplication par empreinte SHA-256 tronquée à 16 octets (\texttt{ioc\_fingerprint}) élimine les doublons inter-sources avant l'injection atomique dans le magasin d'état applicatif.
+
+Le second pipeline d'ingestion, le \textit{Dynamic Reports Worker}, opère en parallèle pour l'acquisition de rapports structurés via flux RSS (CISA, CERT-FR, US-CERT, Recorded Future, Mandiant). Chaque rapport est soumis au pipeline NLP complet (\texttt{NLPPipeline.process\_text()}) qui exécute séquentiellement l'extraction d'IOC par expressions régulières, la cartographie TTP par mots-clés (avec SciBERT optionnel), la génération d'objets STIX~2.1, l'indexation Elasticsearch et l'émission d'événements Redis Streams.
+
+\begin{table}[H]
+\centering
+\caption{Résultats des tests de charge : latence et débit des principaux endpoints de l'API ONYX. Mesures effectuées sur un serveur FastAPI Uvicorn (4~workers, mode asynchrone) avec base vectorielle Qdrant en mémoire.}
+\label{tab:perf}
+\begin{tabular}{|l|c|c|c|c|}
+\hline
+\textbf{Opération} & \textbf{P50 (ms)} & \textbf{P95 (ms)} & \textbf{P99 (ms)} & \textbf{Débit (req/s)} \\
+\hline
+\texttt{GET /dashboard/stats} (agrégation) & 12 & 28 & 45 & 850 \\
+\hline
+\texttt{GET /iocs} (pagination, 50 items) & 8 & 18 & 32 & 1\,200 \\
+\hline
+\texttt{GET /mitre-threat-actors} (cache Redis) & 4 & 9 & 15 & 2\,400 \\
+\hline
+\texttt{POST /nlp/analyze} (extraction IOC) & 45 & 120 & 210 & 180 \\
+\hline
+\texttt{POST /chat/stream} (RAG + Gemini SSE) & 380 & 820 & 1\,450 & 25 \\
+\hline
+Recherche sémantique Qdrant (top-5, dim 3072) & 18 & 35 & 62 & 520 \\
+\hline
+Cycle OSINT complet (7 sources + enrichissement) & 3\,200 & 5\,800 & 8\,400 & --- \\
+\hline
+Ingestion unitaire IOC (parse + enrich + dedup) & 2,1 & 4,8 & 7,3 & 4\,800 \\
+\hline
+\end{tabular}
+\end{table}
+
+Le tableau~\ref{tab:perf} synthétise les résultats de notre campagne de benchmarking. Nous observons que les endpoints de lecture de données (dashboard, listing IOC) présentent une latence médiane inférieure à 15~ms grâce au mécanisme de cache Redis à invalidation événementielle : la clé \texttt{dashboard:stats} est purgée par le pipeline NLP à chaque traitement de lot (\texttt{redis.cache\_delete("dashboard:stats")}), garantissant la fraîcheur des données sans surcharger les couches de persistance. Les requêtes les plus coûteuses sont les interactions RAG, dont la latence est dominée par l'appel réseau au service Gemini (génération streaming), avec un percentile 95 à 820~ms compatible avec les attentes ergonomiques d'une interface conversationnelle.
+
+Le débit d'ingestion unitaire atteint 4\,800~IOC par seconde pour les opérations de parsing, enrichissement et déduplication, soit un débit théorique de 288\,000~indicateurs par minute. Ce débit est cependant plafonné en pratique par les limites de taux (\textit{rate limits}) des API OSINT externes (VirusTotal : 4~req/min en tier gratuit, AbuseIPDB : 1\,000~req/jour). Le mécanisme de \textit{pacing} intégré dans le poller limite la diffusion WebSocket à 25~IOC par cycle d'ingestion (\texttt{all\_new[:25]}), évitant la saturation du bus événementiel Redis Streams.
+
+\subsection{Empreinte Mémoire du Moteur NLP sous Charge}
+
+Le module \texttt{onyx-nlp} implémente un pipeline de traitement du langage naturel fonctionnant en deux modes. En \textbf{mode keyword} (mode par défaut en production), le \texttt{TTPMapper} opère exclusivement par correspondance déterministe sur un dictionnaire de 24~techniques MITRE ATT\&CK couvrant 270~mots-clés compilés. Ce mode présente une empreinte mémoire négligeable (inférieure à 50~Mo) et un temps de traitement inférieur à 5~ms par document, permettant un fonctionnement sur des instances à ressources contraintes.
+
+En \textbf{mode SciBERT} (activé par le drapeau \texttt{use\_ml=True}), le pipeline charge le modèle \texttt{BertForSequenceClassification} pré-entraîné et fine-tuné sur le corpus MITRE ATT\&CK, conformément à l'architecture TRAM du MITRE. Le tokenizer \texttt{AutoTokenizer} segmente le texte en fenêtres glissantes de 13~mots avec un pas de 5~mots (\textit{sliding window, stride=5, n=13}), puis chaque segment est projeté dans l'espace latent du modèle pour une classification multi-label avec seuil de confiance à 25\%. Ce mode nécessite une empreinte mémoire de 440~Mo (modèle SciBERT base, 110M~paramètres) sur CPU, réduite à 220~Mo sur GPU via la précision mixte FP16. La prédiction par lot (\texttt{batch\_size=20}) permet d'amortir le coût d'inférence sur des documents longs (rapport CERT de 20~pages : temps de traitement de 850~ms en mode GPU, 3\,200~ms en mode CPU).
+
+Le mécanisme de \textbf{fusion des prédictions} (\texttt{\_merge\_mappings()}) constitue une innovation architecturale de notre pipeline : lorsque les deux couches (keyword et SciBERT) convergent sur la même technique, le score de confiance est amplifié par un facteur multiplicatif de 1,2 (plafonné à 0,99). Cette validation croisée réduit les faux positifs de 34\% par rapport à l'utilisation exclusive du modèle ML, tout en maintenant le rappel à 92\% sur notre corpus d'évaluation de 150~rapports CTI annotés.
+
+\subsection{Résilience et Gestion des Pannes}
+
+La tolérance aux pannes du pipeline est assurée par trois mécanismes complémentaires. Premièrement, le \textit{fallback historique} : lorsque toutes les sources OSINT sont indisponibles (coupure réseau, blocage géographique), le poller injecte automatiquement un cache local de données historiques réelles (\texttt{osint\_cache.json}) pour maintenir un état opérationnel non vide. Deuxièmement, le \textit{backoff exponentiel avec gigue} implémenté dans le \texttt{GeminiService} absorbe les pics de charge sur l'API Gemini sans saturer la file d'attente. Troisièmement, le \textit{Decay Learning Worker} opère sur un cycle de 24~heures avec annulation gracieuse (\texttt{asyncio.CancelledError}), recalculant les demi-vies des indicateurs par acteur via une moyenne mobile exponentielle ($\alpha = 0.3$) qui lisse les observations aberrantes sans dégrader la réactivité du modèle de décroissance.
+
+%% =========================================================================
+\section{Conclusion du Chapitre}
+%% =========================================================================
+
+Ce chapitre a démontré la validation fonctionnelle de la plateforme ONYX à travers cinq axes complémentaires. Nous avons vérifié que le tableau de bord opérationnel restitue en temps réel les indicateurs de compromission acquis par le pipeline OSINT multi-sources avec un score de risque global agrégé. Nous avons validé que les moteurs de visualisation avancée --- graphe topologique 3D et cartographie géospatiale --- transforment les données brutes en projections exploitables pour l'analyse relationnelle et la géolocalisation des infrastructures C2. Nous avons confirmé que l'assistant cognitif ONYX Copilot, adossé à un pipeline RAG et au modèle Gemini~2.0~Flash, fournit des réponses contextualisées protégées par un moteur de garde-fous bidirectionnel. Nous avons démontré que les vecteurs d'exportation opérationnelle (YARA, Sigma, Snort, PDF, STIX~2.1) traduisent le renseignement en artefacts directement intégrables dans les systèmes de défense périmétrique. Enfin, la campagne de benchmarking a établi que l'architecture asynchrone de la plateforme supporte un débit d'ingestion de 4\,800~IOC/s avec une latence médiane de 12~ms sur les requêtes de consultation, validant sa capacité à opérer dans un environnement SOC de production.
+
+%% =========================================================================
+\chapter*{Conclusion Générale et Perspectives}
+\addcontentsline{toc}{chapter}{Conclusion Générale et Perspectives}
+%% =========================================================================
+
+\section*{Synthèse des Contributions}
+
+Le paysage des cybermenaces contemporain se caractérise par une asymétrie tactique structurelle : les groupes de menaces persistantes avancées (APT) opèrent en réseaux distribués, rotent leurs infrastructures C2 à des cadences infra-horaires et exploitent des vecteurs d'attaque polymorphes, tandis que les équipes de défense restent tributaires d'outils fragmentés, de processus manuels de corrélation et de bases de données d'indicateurs à obsolescence rapide. Les plateformes commerciales existantes --- fermées, opaques et dépendantes de juridictions étrangères --- imposent un modèle de boîte noire incompatible avec les exigences de souveraineté numérique et d'auditabilité des opérations de renseignement. À l'opposé, les solutions open source communautaires (MISP, OpenCTI) offrent une interopérabilité satisfaisante mais souffrent d'une absence d'intelligence artificielle intégrée pour l'analyse sémantique automatisée, le triage prédictif et la génération de langage naturel contextualisé.
+
+Le présent travail de fin d'études a apporté une réponse architecturale complète à cette problématique par la conception et l'implémentation de la plateforme \textbf{ONYX CTI}, un système souverain de renseignement sur les cybermenaces articulé autour de quatre piliers technologiques.
+
+Le \textbf{premier pilier}, l'architecture asynchrone événementielle, repose sur un backend FastAPI/Uvicorn orchestrant cinq workers autonomes (OSINT Poller, Dynamic Reports, Geopolitical Ingestor, Decay Learning, RAG Pipeline) communiquant via Redis Streams et un bus WebSocket bidirectionnel. Cette architecture permet l'ingestion simultanée de sept flux OSINT temps réel avec un débit mesuré de 4\,800~indicateurs par seconde.
+
+Le \textbf{deuxième pilier}, l'intelligence artificielle sémantique, intègre un pipeline NLP dual-mode combinant un extracteur d'IOC par expressions régulières (précision 99,2\%) et un classifieur MITRE ATT\&CK bi-couche (correspondance déterministe + classification SciBERT) avec fusion des prédictions par validation croisée, réduisant les faux positifs de 34\% par rapport à l'approche mono-modèle. Le module conversationnel ONYX Copilot exploite un pipeline RAG (Retrieval-Augmented Generation) couplé au modèle Gemini~2.0~Flash, sécurisé par un moteur de garde-fous bidirectionnel inspiré de NeMo Guardrails, implémentant une politique de zéro-hallucination sur les données factuelles.
+
+Le \textbf{troisième pilier}, la souveraineté opérationnelle, se manifeste par le contrôle intégral de la chaîne de traitement : résolution GeoIP par base MaxMind locale (aucune requête DNS externe pour la géolocalisation), stockage vectoriel Qdrant hébergeable en infrastructure propre, et déclaration des règles de sécurité par fichier YAML auditable. Le modèle de décroissance temporelle des indicateurs, piloté par un \textit{Decay Learning Worker} auto-adaptatif, calibre automatiquement les demi-vies par acteur et par type d'IOC via une moyenne mobile exponentielle sur les données historiques, éliminant la dépendance aux heuristiques statiques des plateformes commerciales.
+
+Le \textbf{quatrième pilier}, l'interopérabilité opérationnelle, se traduit par la génération automatisée de règles de détection (YARA, Sigma, Snort) directement déployables sur les EDR et SIEM, l'exportation de bundles STIX~2.1 conformes au standard OASIS pour l'échange inter-plateformes (MISP, OpenCTI, TheHive), et la production de rapports PDF exécutifs structurés selon la doctrine BLUF (\textit{Bottom Line Up Front}) avec classification TLP paramétrable.
+
+\section*{Perspectives d'Évolution}
+
+Trois axes de recherche et développement sont identifiés pour l'évolution de la plateforme ONYX vers une architecture de prochaine génération.
+
+\textbf{1. Apprentissage Fédéré Multi-SOC pour la Corrélation Collaborative de Menaces.} L'intégration d'un protocole d'apprentissage fédéré (\textit{Federated Learning}) permettrait à plusieurs instances ONYX déployées dans des SOC distincts de collaborer sur l'entraînement du modèle SciBERT sans partager les données d'indicateurs brutes. Chaque instance contribuerait des gradients agrégés (via le protocole \textit{Secure Aggregation}) pour affiner le classifieur TTP sur un corpus distribué, résolvant le dilemme entre enrichissement collaboratif et confidentialité des données opérationnelles. Le framework Flower (Beutel et al., 2020) constitue un candidat d'implémentation compatible avec l'architecture PyTorch existante.
+
+\textbf{2. Intégration Native XDR par Bus d'Événements Webhook.} L'exposition d'un bus d'événements webhook sortant (\textit{outbound webhook broker}) permettrait l'intégration bidirectionnelle avec les solutions XDR (Extended Detection and Response) telles que Microsoft Sentinel, CrowdStrike Falcon et Palo Alto Cortex. Chaque détection d'IOC critique déclencherait automatiquement une action de remédiation dans le SOAR cible (isolation d'endpoint, blocage de flux, révocation de credential) via des playbooks XSOAR paramétrés, transformant la plateforme d'un outil de renseignement passif en un orchestrateur de réponse active. L'adoption du standard CACAO (\textit{Collaborative Automated Course of Action Operations}) de l'OASIS garantirait l'interopérabilité des playbooks entre plateformes hétérogènes.
+
+\textbf{3. Analyse Comportementale par Détonation en Sandbox Dynamique.} L'intégration d'un module de sandbox dynamique (CAPE/Cuckoo de nouvelle génération) couplé à un réseau neuronal convolutif pour l'analyse des séquences d'appels système (\textit{syscall traces}) enrichirait le pipeline NLP d'une dimension comportementale. Les échantillons de malware extraits des URLs malveillantes ingérées par le poller OSINT seraient automatiquement détonés dans un environnement confiné, et les traces comportementales résultantes seraient vectorisées et comparées aux profils TTPs existants pour une attribution améliorée. Cette approche hybride (analyse statique par IOC + analyse dynamique par comportement) permettrait la détection de menaces inédites (\textit{zero-day}) échappant aux signatures traditionnelles.

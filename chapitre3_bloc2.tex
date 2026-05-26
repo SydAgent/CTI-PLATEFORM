@@ -1,0 +1,169 @@
+
+\section{Le C\oe ur Cognitif : Implémentation de l'Intelligence Artificielle}
+
+Le moteur cognitif constitue le noyau analytique de la plateforme, tel que défini au Chapitre~I (section~I.4.b). Sa mission est double : extraire automatiquement les entités de renseignement enfouies dans des flux textuels hétérogènes, puis projeter ces informations dans un espace vectoriel de haute dimension où la proximité géométrique encode la similarité sémantique. Nous détaillons ici les deux fonctions algorithmiques centrales qui réalisent cette transformation, en exposant leurs fondements mathématiques et leurs garanties de performance.
+
+\subsection{Extraction d'Entités Nommées (NER) et Validations Strictes}
+
+Notre moteur d'extraction d'indicateurs de compromission (\texttt{IOCExtractor}) implémente une architecture en deux phases --- extraction large puis validation stricte --- inspirée des patrons de conception du cadriciel AIL (développé par le CERT luxembourgeois) et de la plateforme IntelOwl. Cette conception garantit un taux de faux positifs proche de zéro tout en maintenant un rappel élevé sur l'ensemble des 18 types d'indicateurs supportés.
+
+\subsubsection{Cascade d'expressions régulières par spécificité décroissante}
+
+La première phase déploie un ensemble de 18 expressions régulières précompilées (\texttt{re.compile}), chacune ciblant un type spécifique d'indicateur. L'ordre d'application de ces patrons n'est pas arbitraire : il obéit à un principe de \textbf{précédence par spécificité décroissante} dont la violation produirait des erreurs de classification systématiques.
+
+Considérons le cas des empreintes cryptographiques. Un hachage SHA-512 est une chaîne de 128 caractères hexadécimaux. Un hachage SHA-256 en comporte 64, un SHA-1 en comporte 40 et un MD5 en comporte 32. Si le patron MD5 (32 caractères hexadécimaux contigus) était appliqué en premier, les 32 premiers caractères d'un hachage SHA-256 seraient capturés comme un faux MD5, et le hachage SHA-256 légitime ne serait jamais identifié. Formellement, pour deux patrons $P_a$ et $P_b$ où $\mathcal{L}(P_a) \subset \mathcal{L}(P_b)$ (le langage reconnu par $P_a$ est un sous-ensemble strict du langage reconnu par $P_b$), le patron $P_a$ --- le plus restrictif --- doit être appliqué en premier.
+
+Notre implémentation applique donc la séquence suivante :
+
+\begin{enumerate}
+    \item SHA-512 (128 caractères hexadécimaux) --- le plus restrictif.
+    \item SHA-256 (64 caractères) --- tout SHA-256 résiduel après élimination des SHA-512.
+    \item SHA-1 (40 caractères) --- extraction après élimination des correspondances plus longues.
+    \item MD5 (32 caractères) --- le moins restrictif des hachages.
+    \item Empreintes JA3/JA3S (32 caractères avec préfixe \texttt{ja3:} ou \texttt{ja3s:}).
+    \item Identifiants CVE, techniques MITRE ATT\&CK.
+    \item URL (avant les domaines, car les URL contiennent des domaines).
+    \item Adresses de courrier électronique (avant les domaines, pour la même raison).
+    \item Plages CIDR (avant les adresses IP individuelles).
+    \item Adresses IPv4 et IPv6.
+    \item Noms de domaine.
+    \item Portefeuilles de cryptomonnaies (Bitcoin, Ethereum, Monero).
+    \item Adresses de services cachés \texttt{.onion}, numéros ASN, règles YARA.
+\end{enumerate}
+
+Un mécanisme de déduplication inter-patrons complète cette cascade : avant d'enregistrer une correspondance, l'algorithme vérifie que la valeur extraite n'est pas déjà contenue dans une correspondance plus longue précédemment capturée. Cette vérification empêche, par exemple, qu'un sous-ensemble de 32 caractères d'un SHA-256 déjà extrait soit enregistré comme un MD5 distinct.
+
+\subsubsection{Filtrage topologique : exclusion des plages réservées RFC~1918}
+
+Chaque adresse IPv4 candidate est soumise à un filtrage topologique rigoureux avant son admission comme indicateur de compromission. Ce filtrage repose sur le module \texttt{ipaddress} de la bibliothèque standard Python, qui fournit une implémentation conforme aux RFC pour la manipulation d'adresses réseau.
+
+Nous excluons systématiquement les adresses appartenant aux plages suivantes :
+
+\begin{itemize}
+    \item \textbf{Plages privées RFC~1918} : \texttt{10.0.0.0/8}, \texttt{172.16.0.0/12}, \texttt{192.168.0.0/16} --- ces adresses ne sont pas routables sur l'Internet public et ne constituent donc jamais des indicateurs de compromission valides dans un contexte de renseignement sur les menaces externes.
+    \item \textbf{Adresses de bouclage} : \texttt{127.0.0.0/8} --- adresses locales sans signification opérationnelle.
+    \item \textbf{Adresses de lien local} : \texttt{169.254.0.0/16} --- adresses auto-attribuées en l'absence de serveur DHCP.
+    \item \textbf{Plages de multidiffusion et réservées} : \texttt{224.0.0.0/4} (multidiffusion) et \texttt{240.0.0.0/4} (réservé pour usage futur).
+    \item \textbf{Plage nulle} : \texttt{0.0.0.0/8} --- adresses non attribuables.
+\end{itemize}
+
+Le test d'appartenance est effectué par itération sur un ensemble préchargé de huit objets \texttt{ip\_network}, avec une complexité de $\mathcal{O}(1)$ par test (nombre fixe de réseaux) et une complexité totale de $\mathcal{O}(k)$ par adresse candidate, où $k = 8$ est le nombre de plages exclues.
+
+\subsubsection{Analyse entropique et rejet des faux positifs}
+
+Les empreintes cryptographiques légitimes présentent une entropie informationnelle élevée : la sortie d'une fonction de hachage cryptographique est, par construction, pseudo-aléatoire et uniformément distribuée sur l'espace de sortie. À l'inverse, les chaînes hexadécimales accidentellement capturées par nos expressions régulières --- identifiants de version, clés de configuration, fragments de code --- présentent typiquement une entropie significativement plus faible.
+
+Nous exploitons cette propriété en calculant la cardinalité de l'alphabet effectif de chaque correspondance candidate. Pour une chaîne $s$ de longueur $\ell$ composée de caractères hexadécimaux (alphabet théorique $\Sigma = \{0, 1, \ldots, 9, a, b, c, d, e, f\}$, $|\Sigma| = 16$), nous définissons la diversité caractérielle $\delta(s) = |\{c \in \Sigma : c \in s\}|$. Un seuil minimal $\delta_{\min} = 6$ est imposé : toute chaîne dont la diversité est inférieure à 6 caractères hexadécimaux distincts est rejetée comme faux positif.
+
+Ce seuil a été calibré empiriquement : une empreinte SHA-256 authentique, produite par une fonction pseudo-aléatoire, contient en moyenne 15{,}4 caractères distincts sur 16 possibles pour une chaîne de 64 caractères (d'après le problème du collecteur de coupons, $\mathbb{E}[\delta] = 16 \cdot (1 - (15/16)^{64}) \approx 15{,}4$). Un seuil de 6 offre donc une marge confortable de rejet des faux positifs tout en éliminant les chaînes pathologiques telles que \texttt{0000...0000} ou \texttt{aaaa...aaaa}.
+
+\begin{lstlisting}[language=Python, caption={Validation d'empreinte cryptographique par analyse entropique et exclusion contextuelle.}, label={lst:entropy}]
+import re
+
+# Empreintes triviales connues (faux positifs certains)
+HASH_EXCLUSIONS = {
+    "0" * 32, "f" * 32,   # MD5 nuls ou pleins
+    "0" * 40, "f" * 40,   # SHA-1 nuls ou pleins
+    "0" * 64, "f" * 64,   # SHA-256 nuls ou pleins
+    "0" * 128, "f" * 128, # SHA-512 nuls ou pleins
+}
+
+# Contexte indicatif d'un faux positif
+FP_CONTEXT_PATTERN = re.compile(
+    r"version|v\d|release|update|build",
+    re.IGNORECASE,
+)
+
+def is_valid_hash(
+    hash_str: str,
+    expected_len: int,
+    context: str = "",
+    entropy_threshold: int = 6,
+) -> bool:
+    """
+    Validation multi-criteres d'une empreinte
+    cryptographique candidate.
+
+    Criteres :
+      1. Longueur exacte attendue.
+      2. Non-appartenance aux empreintes triviales.
+      3. Diversite characterielle >= entropy_threshold.
+      4. Absence de contexte de faux positif.
+
+    Retourne True si l'empreinte est consideree valide.
+    """
+    # Critere 1 : longueur stricte
+    if len(hash_str) != expected_len:
+        return False
+
+    # Critere 2 : exclusion des empreintes triviales
+    if hash_str.lower() in HASH_EXCLUSIONS:
+        return False
+
+    # Critere 3 : analyse entropique
+    # delta(s) = |{c in Sigma : c in s}|
+    unique_chars = len(set(hash_str.lower()))
+    if unique_chars < entropy_threshold:
+        return False
+
+    # Critere 4 : analyse contextuelle
+    # Rejet si le contexte environnant (+/- 50 chars)
+    # contient des indicateurs de version/release
+    if context and FP_CONTEXT_PATTERN.search(context):
+        return False
+
+    return True
+\end{lstlisting}
+
+\subsubsection{Analyse contextuelle et scoring de confiance}
+
+Au-delà du filtrage binaire (acceptation ou rejet), notre extracteur attribue à chaque indicateur un score de confiance $\gamma \in [0, 1]$ qui quantifie la probabilité que la correspondance soit un véritable indicateur de compromission. Ce score est initialisé à une valeur par défaut dépendant du type (0{,}95 pour les adresses IPv4 publiques, 0{,}90 pour les empreintes cryptographiques, 0{,}85 pour les noms de domaine) puis modulé par l'analyse contextuelle.
+
+Pour chaque correspondance, une fenêtre de contexte de $\pm 50$ caractères est extraite du texte source. Si cette fenêtre contient des termes indicatifs d'un contexte non malveillant --- \textit{version}, \textit{release}, \textit{update}, \textit{build} --- le score de confiance est abaissé de 0{,}95 à 0{,}40. Les correspondances dont le score final est inférieur au seuil minimal configurable ($\gamma_{\min} = 0{,}50$ par défaut) sont exclues du résultat final. Cette approche graduée offre une flexibilité opérationnelle supérieure au filtrage binaire : l'analyste peut ajuster le seuil de sensibilité en fonction du contexte opérationnel, privilégiant le rappel (seuil bas) ou la précision (seuil haut) selon les besoins de sa mission.
+
+\subsection{Vectorisation Sémantique (SciBERT) et Indexation HNSW (Qdrant)}
+
+La recherche par mots-clés, même enrichie par les opérateurs booléens et la pondération TF-IDF d'Elasticsearch (Chapitre~II, section~II.3.d), ne suffit pas à détecter les similarités conceptuelles entre rapports de renseignement. Deux rapports décrivant la même campagne d'attaque peuvent utiliser des vocabulaires radicalement différents : l'un parlera d'\textit{exfiltration via DNS tunneling}, l'autre de \textit{canal de commande et contrôle exploitant des requêtes DNS}. La correspondance lexicale entre ces deux formulations est nulle, alors que leur proximité sémantique est maximale. Seule une représentation dans un espace vectoriel de haute dimension permet de capturer cette équivalence conceptuelle.
+
+\subsubsection{Architecture de SciBERT et spécialisation sur corpus scientifique}
+
+SciBERT est un modèle de langage pré-entraîné de la famille BERT (\textit{Bidirectional Encoder Representations from Transformers}), développé par l'Allen Institute for AI. Contrairement au modèle BERT généraliste --- entraîné sur les corpus BooksCorpus et Wikipedia anglophone --- SciBERT a été pré-entraîné sur un corpus de 1{,}14 million d'articles scientifiques issus de Semantic Scholar, couvrant les domaines de l'informatique et des sciences biomédicales. Ce pré-entraînement spécialisé confère au modèle une compréhension fine du vocabulaire technique utilisé dans les rapports de cybersécurité : termes tels que \textit{lateral movement}, \textit{command and control}, \textit{privilege escalation} ou \textit{ransomware-as-a-service} sont correctement tokenisés et contextualisés, là où un modèle généraliste les fragmenterait en sous-mots peu informatifs.
+
+L'architecture interne de SciBERT se compose de :
+\begin{itemize}
+    \item \textbf{Couche de segmentation (WordPiece)} : le texte d'entrée est décomposé en sous-mots (\textit{subword tokens}) via l'algorithme WordPiece, qui maintient un vocabulaire de 31~000 sous-mots appris sur le corpus scientifique. Les termes techniques fréquents (\textit{malware}, \textit{vulnerability}) sont conservés comme jetons uniques; les termes rares sont décomposés en fragments connus du vocabulaire.
+    \item \textbf{12 couches de Transformeur} : chaque couche applique un mécanisme d'attention multi-têtes (\textit{multi-head self-attention}) composé de 12 têtes d'attention indépendantes. Pour une séquence d'entrée $\mathbf{X} \in \mathbb{R}^{n \times 768}$ (où $n$ est le nombre de jetons), chaque tête $h$ calcule :
+    \[
+    \text{Attention}_h(\mathbf{Q}_h, \mathbf{K}_h, \mathbf{V}_h) = \text{softmax}\!\left(\frac{\mathbf{Q}_h \mathbf{K}_h^\top}{\sqrt{d_k}}\right) \mathbf{V}_h
+    \]
+    où $\mathbf{Q}_h = \mathbf{X}\mathbf{W}_h^Q$, $\mathbf{K}_h = \mathbf{X}\mathbf{W}_h^K$, $\mathbf{V}_h = \mathbf{X}\mathbf{W}_h^V$ sont les matrices de requête, clé et valeur, et $d_k = 64$ est la dimension de chaque tête. Les sorties des 12 têtes sont concaténées et projetées linéairement pour produire la sortie de la couche. Ce mécanisme permet au modèle de pondérer l'importance relative de chaque jeton en fonction de l'ensemble du contexte, capturant les dépendances sémantiques à longue distance.
+    \item \textbf{Couche de sortie} : le vecteur associé au jeton spécial \texttt{[CLS]}, inséré en position initiale de chaque séquence, encode une représentation agrégée de l'ensemble du document après traversée des 12 couches d'attention. Ce vecteur $\mathbf{v}_r \in \mathbb{R}^{768}$ constitue la représentation sémantique du rapport $r$.
+\end{itemize}
+
+\subsubsection{Similarité cosinus et corrélation sémantique}
+
+La mesure de similarité retenue pour comparer les représentations vectorielles est la similarité cosinus. Pour deux vecteurs $\mathbf{u}, \mathbf{v} \in \mathbb{R}^{768}$ représentant respectivement deux rapports de renseignement, elle est définie par :
+
+\begin{equation}
+\label{eq:cosine-sim}
+\text{sim}_{\cos}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\|_2 \; \|\mathbf{v}\|_2} = \frac{\displaystyle\sum_{i=1}^{768} u_i \, v_i}{\sqrt{\displaystyle\sum_{i=1}^{768} u_i^2} \;\; \sqrt{\displaystyle\sum_{i=1}^{768} v_i^2}}
+\end{equation}
+
+Cette mesure possède deux propriétés mathématiques qui la rendent supérieure à la recherche lexicale pour la corrélation de campagnes d'attaques :
+
+\begin{enumerate}
+    \item \textbf{Invariance à la norme} : la similarité cosinus mesure exclusivement l'angle entre les directions des vecteurs dans $\mathbb{R}^{768}$, indépendamment de leur magnitude. Deux rapports de longueurs très différentes --- un bulletin d'alerte de 200 mots et un rapport d'investigation de 5\,000 mots --- décrivant la même campagne produiront des vecteurs de normes différentes mais orientés dans la même direction, et obtiendront donc une similarité élevée. La recherche par mots-clés (TF-IDF, BM25) est au contraire biaisée par la fréquence absolue des termes, pénalisant les documents courts.
+    \item \textbf{Capture des relations sémantiques latentes} : les couches d'attention de SciBERT projettent les synonymes, les paraphrases et les formulations alternatives vers des régions proches de l'espace vectoriel. Les termes \textit{data exfiltration} et \textit{information theft}, bien que lexicalement disjoints, produisent des représentations vectorielles dont la similarité cosinus est typiquement supérieure à 0{,}90 après pré-entraînement. La recherche Elasticsearch, fondée sur la correspondance de jetons (\textit{token matching}) et la distance d'édition (\textit{fuzzy matching}), ne peut pas capturer cette équivalence sémantique car elle opère dans l'espace des formes lexicales de surface, et non dans l'espace des significations.
+\end{enumerate}
+
+En pratique, nous définissons un seuil de corrélation $\tau = 0{,}85$ : toute paire de rapports dont la similarité cosinus dépasse ce seuil est signalée comme potentiellement liée à la même campagne, même en l'absence totale de mots-clés communs. Cette capacité de corrélation sémantique constitue un avantage fonctionnel déterminant par rapport aux solutions analysées au Chapitre~I (section~I.2) : ni MISP, ni OpenCTI ne proposent nativement de recherche par similarité vectorielle.
+
+\subsubsection{Indexation HNSW dans Qdrant et complexité logarithmique}
+
+Les vecteurs produits par SciBERT sont indexés dans Qdrant, notre base de données vectorielle (Chapitre~II, section~II.3.e). Le défi algorithmique de la recherche du plus proche voisin (\textit{Nearest Neighbor Search}) dans un espace de dimension $d = 768$ est le suivant : une recherche exhaustive (\textit{brute-force}) nécessite le calcul de la similarité cosinus entre le vecteur requête et chacun des $n$ vecteurs indexés, soit une complexité de $\mathcal{O}(n \cdot d)$. Pour un corpus de $n = 10^6$ rapports, cette approche est prohibitive en temps de réponse interactif.
+
+Qdrant résout ce problème par l'indexation HNSW (\textit{Hierarchical Navigable Small World}), une structure de données probabiliste qui organise les vecteurs en un graphe navigable multi-couches. L'algorithme HNSW construit une hiérarchie de graphes de proximité : la couche supérieure contient un sous-ensemble réduit de n\oe uds avec des arêtes à longue portée pour la navigation grossière, tandis que les couches inférieures ajoutent progressivement des n\oe uds avec des arêtes à courte portée pour le raffinement local. La recherche s'effectue par descente gloutonne (\textit{greedy search}) depuis la couche supérieure vers la couche de base.
+
+La complexité de recherche résultante est en $\mathcal{O}(\log n)$ pour $n$ vecteurs indexés, soit un gain de plusieurs ordres de grandeur par rapport à la recherche exhaustive. Pour un corpus de $10^6$ documents, le nombre d'opérations de comparaison passe de $10^6$ (recherche exhaustive) à environ 20 (recherche HNSW), avec une dégradation contrôlée de l'exactitude : le paramètre \texttt{ef\_search} permet de régler le compromis entre précision et latence, un \texttt{ef\_search} de 128 offrant typiquement un rappel supérieur à 99~\% des vrais plus proches voisins.
+
+Cette architecture vectorielle complète la recherche textuelle d'Elasticsearch selon un modèle de complémentarité fonctionnelle : Elasticsearch excelle dans la recherche exacte de termes connus (\textit{``CVE-2024-3400''}, \textit{``185.220.101.45''}), tandis que Qdrant excelle dans la découverte de relations sémantiques latentes entre documents dont le vocabulaire de surface diverge. Nous exploitons conjointement ces deux capacités dans le pipeline RAG (\textit{Retrieval-Augmented Generation}) qui alimente l'assistant conversationnel de la plateforme.

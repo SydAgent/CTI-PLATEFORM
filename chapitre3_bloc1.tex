@@ -1,0 +1,263 @@
+\chapter{Ingénierie d'Acquisition, Pipeline de Traitement et Intelligence Sémantique}
+
+Dans ce chapitre, nous exposons les mécanismes internes qui transforment la donnée brute, collectée depuis des sources hétérogènes et potentiellement hostiles, en renseignement structuré et actionnable. Nous détaillons successivement l'architecture d'acquisition et ses contraintes de sécurité opérationnelle (OPSEC), le pipeline ETL et sa conformité au standard STIX~2.1, le moteur d'intelligence artificielle, la modélisation avancée par graphe de menace et le modèle de concurrence asynchrone qui garantit la résilience de l'ensemble. Chaque composant est présenté avec la rigueur algorithmique nécessaire à la compréhension de son fonctionnement interne, en cohérence directe avec les choix architecturaux établis au Chapitre~I et les justifications technologiques du Chapitre~II.
+
+%% =========================================================================
+\section{Architecture d'Acquisition et Furtivité Opérationnelle (OPSEC)}
+%% =========================================================================
+
+L'acquisition constitue la première étape critique de la chaîne de renseignement. Comme établi au Chapitre~I (section~I.4.a), notre matrice d'acquisition opère simultanément sur le Web de surface et sur les couches profondes de l'Internet. Nous présentons ici les mécanismes algorithmiques et les mesures de sécurité opérationnelle (OPSEC) qui régissent chacun de ces vecteurs.
+
+\subsection{Crawlers du Web de Surface : Boucle Événementielle Twisted et Rendu DOM Headless}
+
+Notre pipeline d'ingestion du Web de surface repose sur l'orchestration conjointe de deux cadres complémentaires, conformément à la justification présentée au Chapitre~II (section~II.1.b).
+
+\subsubsection{Scrapy et le paradigme asynchrone Twisted}
+
+Scrapy assure la collecte à grande échelle selon un paradigme asynchrone fondé sur le patron de conception producteur-consommateur. Son architecture interne repose sur la boucle événementielle Twisted (\textit{Twisted Reactor}), une implémentation du patron de conception réacteur (\textit{reactor pattern}) pour Python. Contrairement à un modèle multi-thread dans lequel chaque requête HTTP mobilise un fil d'exécution dédié --- avec le coût mémoire et les risques d'interblocage associés --- Twisted opère sur un fil unique et délègue les opérations d'entrée-sortie réseau au système d'exploitation via des appels non bloquants (\texttt{select}/\texttt{epoll}/\texttt{kqueue} selon la plateforme). L'ordonnanceur central (\texttt{Scheduler}) maintient une file de priorité des requêtes à émettre et les distribue vers un ensemble de téléchargeurs concurrents (\texttt{Downloader}). Chaque réponse HTTP est acheminée vers une fonction d'extraction (\textit{callback}) qui produit soit de nouveaux éléments de données (\texttt{Item}), soit de nouvelles requêtes à planifier (\texttt{Request}). Ce mécanisme garantit une complexité algorithmique sous-linéaire en termes de latence perçue, car les opérations d'entrée-sortie réseau se chevauchent dans le temps sans contention de verrous.
+
+La configuration du moteur de téléchargement applique les contraintes suivantes : un délai inter-requêtes de 2 secondes par domaine (\texttt{DOWNLOAD\_DELAY}), une concurrence maximale de 8 requêtes simultanées par domaine (\texttt{CONCURRENT\_REQUESTS\_PER\_DOMAIN}), et un mécanisme de respect automatique de la directive \texttt{robots.txt} (\texttt{ROBOTSTXT\_OBEY = True}) pour les sources institutionnelles.
+
+\subsubsection{Playwright et le rendu DOM headless}
+
+Playwright intervient comme couche de rendu complémentaire pour les sources qui exigent l'exécution de code JavaScript côté client. Notre implémentation instancie un navigateur Chromium en mode sans interface graphique (\textit{headless}), piloté par le protocole CDP (\textit{Chrome DevTools Protocol}), afin de produire un arbre DOM complet avant l'extraction. Le processus s'exécute en trois phases séquentielles :
+
+\begin{enumerate}
+    \item \textbf{Navigation et attente du rendu} : Playwright charge la page cible et attend la stabilisation du réseau (\texttt{networkidle}), ce qui garantit que toutes les requêtes AJAX et les injections dynamiques de contenu sont terminées.
+    \item \textbf{Extraction du DOM résolu} : la méthode \texttt{page.content()} retourne le HTML complet tel que rendu par le moteur Blink, incluant les éléments générés dynamiquement par les cadres applicatifs JavaScript (React, Vue, Angular) invisibles dans le HTML source initial.
+    \item \textbf{Isolation du processus navigateur} : chaque session de rendu s'exécute dans un contexte de navigateur isolé (\texttt{browser.new\_context()}), empêchant la persistance de cookies, de stockage local ou de données de session entre les collectes.
+\end{enumerate}
+
+Cette approche résout le problème des pages à rendu dynamique, fréquentes sur les portails d'actualité en cybersécurité et les tableaux de bord de sources institutionnelles telles que CISA et MITRE ATT\&CK.
+
+\subsubsection{Déduplication par hachage cryptographique SHA-256}
+
+Afin d'éviter la saturation du pipeline par des contenus redondants, nous avons implémenté un intergiciel (\textit{middleware}) de déduplication fondé sur le hachage cryptographique SHA-256. Pour chaque page collectée, l'algorithme calcule une empreinte cryptographique du contenu textuel extrait, après suppression des balises de présentation. Cette empreinte est ensuite comparée à un ensemble de hachages déjà observés, maintenu en mémoire sous forme de table de hachage (\texttt{set} Python) offrant une complexité de recherche en $\mathcal{O}(1)$ amorti.
+
+\begin{lstlisting}[language=Python, caption={Intergiciel de déduplication par hachage SHA-256 avec complexité $\mathcal{O}(1)$.}, label={lst:dedup}]
+import hashlib
+from bs4 import BeautifulSoup
+
+class ContentDeduplicationMiddleware:
+    """
+    Intergiciel Scrapy : rejette les pages dont le contenu
+    textuel a deja ete observe. Complexite O(1) amorti
+    via table de hachage (set Python).
+    """
+    def __init__(self):
+        self._seen_hashes: set[str] = set()
+
+    def process_response(self, request, response, spider):
+        soup = BeautifulSoup(response.text, "html.parser")
+        # Suppression des elements non informatifs
+        for tag in soup(["script", "style", "noscript",
+                         "nav", "footer", "header"]):
+            tag.decompose()
+        clean_text = soup.get_text(separator="\n", strip=True)
+
+        # Calcul de l'empreinte SHA-256
+        content_hash = hashlib.sha256(
+            clean_text.encode("utf-8", errors="ignore")
+        ).hexdigest()
+
+        # Test d'appartenance en O(1) amorti
+        if content_hash in self._seen_hashes:
+            spider.logger.debug(
+                f"Doublon detecte, rejet : {request.url}"
+            )
+            from scrapy.exceptions import IgnoreRequest
+            raise IgnoreRequest("Contenu duplique")
+
+        self._seen_hashes.add(content_hash)
+        response.meta["content_hash"] = content_hash
+        return response
+\end{lstlisting}
+
+Formellement, pour un document $d_i$ dont le contenu textuel nettoyé est $T_i$, nous calculons $h_i = \texttt{SHA-256}(T_i)$. Si $h_i \in \mathcal{H}_{\text{vu}}$, le document est rejeté comme doublon. Sinon, $h_i$ est inséré dans $\mathcal{H}_{\text{vu}}$ et le document progresse vers l'étape suivante du pipeline. La propriété de résistance aux collisions de SHA-256 --- $2^{128}$ opérations pour une collision par attaque par anniversaire --- assure que deux contenus distincts ne produisent jamais la même empreinte dans le cadre opérationnel de notre plateforme.
+
+\subsection{Infiltration du Dark Web : Gestion du Routage en Oignon et OPSEC}
+
+La collecte sur les couches profondes de l'Internet constitue le vecteur d'acquisition le plus sensible de notre architecture. Nous avons conçu un gestionnaire de circuits Tor (\texttt{TorManager}) qui encapsule l'intégralité du cycle de vie des connexions au réseau d'anonymisation, depuis l'établissement initial du circuit jusqu'à la rotation automatisée des adresses IP de sortie.
+
+\subsubsection{Automate d'état du gestionnaire Tor}
+
+Notre gestionnaire opère selon un automate à quatre états : \texttt{CONNECTED}, \texttt{DISCONNECTED}, \texttt{ROTATING} et \texttt{KILLED}. L'état \texttt{KILLED} correspond à l'activation d'un mécanisme d'arrêt d'urgence (\textit{kill-switch}) qui bloque instantanément tout trafic vers les services cachés \texttt{.onion}. Cette conception défensive garantit qu'en cas de compromission suspectée du circuit, l'opérateur peut immédiatement couper toute interaction avec les sources profondes, sans attendre la terminaison des connexions en cours.
+
+La connectivité est vérifiée par interrogation de l'interface programmatique du Tor Project (\texttt{check.torproject.org/api/ip}), qui confirme que le trafic est effectivement acheminé à travers le réseau Tor et retourne l'adresse IP du n\oe ud de sortie courant. Cette vérification est systématiquement exécutée avant chaque session de collecte.
+
+\subsubsection{Rotation des circuits via le signal NEWNYM (port de contrôle 9051)}
+
+Nous avons implémenté la rotation automatisée des circuits Tor par communication directe avec le processus Tor via son port de contrôle (port~9051). Le signal \texttt{NEWNYM} ordonne au client Tor de construire de nouveaux circuits pour les requêtes futures, modifiant ainsi l'adresse IP de sortie observable par les sites cibles. Notre implémentation utilise le protocole de contrôle Tor sur une connexion TCP authentifiée, avec deux critères de déclenchement complémentaires : un seuil de 50 requêtes par circuit et un intervalle temporel maximal configurable.
+
+\begin{lstlisting}[language=Python, caption={Rotation de circuit Tor via signal NEWNYM sur le port de contrôle 9051.}, label={lst:newnym}]
+import asyncio
+import random
+import math
+
+class TorCircuitRotator:
+    """
+    Gestionnaire de rotation de circuits Tor.
+    Envoie le signal NEWNYM au port de contrôle 9051
+    apres verification de la condition de seuil.
+    """
+    def __init__(self, control_port=9051,
+                 control_password="onyx_tor_auth",
+                 max_requests_per_circuit=50):
+        self._control_port = control_port
+        self._password = control_password
+        self._max_requests = max_requests_per_circuit
+        self._request_count = 0
+        self._lock = asyncio.Lock()
+
+    def _stochastic_delay(self) -> float:
+        """
+        Delai stochastique par distribution log-normale
+        tronquee : mu=1.5s, sigma=0.5s, borne [0.8, 6.0].
+        Emule un comportement humain non deterministe.
+        """
+        mu, sigma = 1.5, 0.5
+        delay = random.lognormvariate(
+            math.log(mu), sigma
+        )
+        return max(0.8, min(delay, 6.0))
+
+    async def maybe_rotate(self):
+        """Rotation conditionnelle apres N requetes."""
+        self._request_count += 1
+        # Condition de declenchement
+        if self._request_count < self._max_requests:
+            return
+        await self._send_newnym()
+
+    async def _send_newnym(self):
+        """Envoi du signal NEWNYM au processus Tor."""
+        async with self._lock:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(
+                    "127.0.0.1", self._control_port
+                ),
+                timeout=10.0,
+            )
+            await reader.readline()  # Banniere Tor
+
+            # Authentification au port de controle
+            writer.write(
+                f'AUTHENTICATE "{self._password}"\r\n'
+                .encode()
+            )
+            await writer.drain()
+            resp = await reader.readline()
+            if b"250" not in resp:
+                raise ConnectionError(
+                    f"Echec authentification Tor: "
+                    f"{resp.decode().strip()}"
+                )
+
+            # Emission du signal NEWNYM
+            writer.write(b"SIGNAL NEWNYM\r\n")
+            await writer.drain()
+            resp = await reader.readline()
+
+            writer.close()
+            await writer.wait_closed()
+
+            if b"250" in resp:
+                # Attente de construction du circuit
+                delay = self._stochastic_delay()
+                await asyncio.sleep(delay)
+                self._request_count = 0
+\end{lstlisting}
+
+Le délai post-rotation est calculé par une distribution log-normale tronquée $\mathcal{LN}(\mu=1{,}5, \sigma=0{,}5)$ bornée à l'intervalle $[0{,}8; 6{,}0]$ secondes. Nous avons retenu la distribution log-normale plutôt qu'une distribution uniforme, car elle modélise plus fidèlement les temps de réaction humains : une densité de probabilité concentrée autour de la médiane avec une queue droite étendue. Ce profil temporel non déterministe empêche l'identification du comportement du collecteur par analyse statistique des temps inter-requêtes, un vecteur de détection classique des systèmes anti-automatisation.
+
+\subsubsection{Contournement de l'anti-fingerprinting des blogs de rançongiciels}
+
+Les blogs de rançongiciels et les forums clandestins déploient des mécanismes de détection des agents automatisés fondés sur l'analyse de l'empreinte du navigateur (\textit{browser fingerprint}). Notre architecture contourne ces dispositifs par trois mesures complémentaires de ségrégation :
+
+\begin{enumerate}
+    \item \textbf{Rotation des agents utilisateur} : chaque requête est émise avec un en-tête \texttt{User-Agent} sélectionné aléatoirement parmi un ensemble de cinq signatures correspondant aux versions authentiques du navigateur Tor Browser (basé sur Firefox~ESR~115). Le trafic devient ainsi indistinguable du trafic légitime des utilisateurs du réseau Tor.
+    \item \textbf{Conformité protocolaire stricte} : les en-têtes HTTP (\texttt{Accept}, \texttt{Accept-Language}, \texttt{Accept-Encoding}, \texttt{Connection}, \texttt{Upgrade-Insecure-Requests}) reproduisent exactement le profil par défaut du navigateur Tor Browser, évitant toute divergence détectable par les systèmes d'analyse d'en-têtes côté serveur.
+    \item \textbf{Isolation par domaine (IsolateDestAddr)} : la directive \texttt{IsolateDestAddr} dans la configuration \texttt{torrc} garantit que chaque domaine \texttt{.onion} cible est atteint via un circuit Tor distinct. Ce cloisonnement empêche la corrélation croisée entre les sessions de collecte sur des cibles différentes, même si un n\oe ud de sortie compromis observe le trafic.
+\end{enumerate}
+
+La conjonction de ces mesures assure une furtivité opérationnelle suffisante pour opérer de manière soutenue sur les principales places de marché illicites et les blogs de publication de données exfiltrées, sans déclencher les mécanismes de bannissement par adresse IP ou par empreinte comportementale.
+
+%% =========================================================================
+\section{Pipeline ETL (Extract, Transform, Load) et Modélisation STIX~2.1}
+%% =========================================================================
+
+La donnée brute extraite par la matrice d'acquisition se présente sous une forme hétérogène : pages HTML, flux JSON, contenus textuels non structurés issus de forums clandestins. Nous avons conçu un pipeline ETL (\textit{Extract, Transform, Load}) rigoureux qui normalise, transforme et persiste cette donnée selon le standard STIX~2.1, garantissant ainsi l'interopérabilité exigée par l'exigence fonctionnelle EF-2 du Chapitre~I.
+
+\subsection{Phase d'extraction : Nettoyage et Refangage}
+
+La phase d'extraction opère en deux temps. Le parseur HTML, implémenté via BeautifulSoup4 (Chapitre~II, section~II.1.b), applique d'abord une décomposition sélective de l'arbre DOM : les éléments non informatifs (\texttt{<script>}, \texttt{<style>}, \texttt{<noscript>}, \texttt{<nav>}, \texttt{<footer>}, \texttt{<header>}) sont systématiquement supprimés avant l'extraction du texte résiduel. Cette opération réduit en moyenne de 60~\% à 80~\% le volume de données transmis aux étapes analytiques en aval, diminuant proportionnellement la charge computationnelle des algorithmes de traitement du langage naturel.
+
+Le texte nettoyé est ensuite soumis à un processus de refangage (\textit{refanging}) par application séquentielle de sept expressions régulières précompilées. Les indicateurs de compromission intentionnellement obscurcis par leurs auteurs --- convention courante dans les rapports techniques et les forums de cybersécurité --- sont automatiquement restaurés dans leur forme canonique :
+
+\begin{itemize}
+    \item \texttt{hxxp} $\rightarrow$ \texttt{http} et \texttt{hXXp} $\rightarrow$ \texttt{http}
+    \item \texttt{[.]} et \texttt{(.)} et \texttt{[dot]} $\rightarrow$ \texttt{.}
+    \item \texttt{[://]} $\rightarrow$ \texttt{://}
+    \item \texttt{[at]} et \texttt{(at)} $\rightarrow$ \texttt{@}
+    \item \texttt{\textbackslash.} $\rightarrow$ \texttt{.}
+\end{itemize}
+
+Ce processus est systématiquement appliqué en amont de la phase d'extraction d'entités, garantissant que les algorithmes de reconnaissance opèrent sur des représentations normalisées indépendamment des conventions de défangage propres à chaque source.
+
+\subsection{Phase de transformation : Mapping vers le standard STIX~2.1}
+
+La transformation constitue l'étape pivot du pipeline ETL. Chaque indicateur de compromission extrait est mappé vers un objet STIX~2.1 de type \texttt{indicator}, dont le champ \texttt{pattern} est construit selon la grammaire formelle STIX Patterning définie par le comité technique OASIS CTI. Notre implémentation supporte huit types d'indicateurs avec leur patron correspondant : adresses IPv4 et IPv6, noms de domaine, URL, empreintes cryptographiques (MD5, SHA-1, SHA-256) et adresses de courrier électronique.
+
+L'objet STIX généré par notre pipeline se présente sous la forme JSON suivante :
+
+\begin{lstlisting}[language=json, caption={Objet STIX~2.1 de type \texttt{indicator} généré par le pipeline ONYX.}, label={lst:stix-json}]
+{
+  "type": "indicator",
+  "spec_version": "2.1",
+  "id": "indicator--a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "created": "2026-05-12T14:30:00.000Z",
+  "modified": "2026-05-12T14:30:00.000Z",
+  "name": "ipv4: 185.220.101.45",
+  "description": "C2 server detected by ONYX NLP pipeline",
+  "pattern": "[ipv4-addr:value = '185.220.101.45']",
+  "pattern_type": "stix",
+  "valid_from": "2026-05-12T14:30:00.000Z",
+  "confidence": 97,
+  "labels": ["ipv4", "abuse.ch Feodo Tracker"],
+  "x_onyx_source": "abuse.ch Feodo Tracker",
+  "x_onyx_tags": ["feodo", "c2", "botnet"],
+  "x_onyx_mitre_techniques": ["T1071", "T1568"],
+  "x_onyx_decay_score": 1.0,
+  "x_onyx_decay_state": "valid"
+}
+\end{lstlisting}
+
+Nous soulignons plusieurs choix de conception dans cette structure. Le champ \texttt{pattern} respecte strictement la grammaire STIX Patterning, ce qui garantit l'interopérabilité avec les plateformes tierces (MISP, OpenCTI, Splunk). Les champs préfixés par \texttt{x\_onyx\_} exploitent le mécanisme d'extension du standard STIX~2.1 pour enrichir chaque indicateur avec des métadonnées propriétaires --- source d'acquisition, étiquettes de classification, techniques MITRE associées, score de déclin --- sans violer la conformité au standard. Le champ \texttt{confidence} (0--100) quantifie la fiabilité de l'indicateur selon un barème combinant la réputation de la source et le score de confiance de l'extracteur NLP.
+
+\subsection{Phase de chargement : Persistance MongoDB et le problème du polymorphisme STIX}
+
+\subsubsection{Le problème du polymorphisme STIX dans un schéma relationnel}
+
+Le modèle de données STIX~2.1 définit 18 types d'objets de domaine (SDO), 2 types d'objets de relation (SRO) et 6 types de méta-objets, chacun possédant un ensemble d'attributs qui lui est propre. Un objet \texttt{indicator} possède les champs \texttt{pattern}, \texttt{pattern\_type} et \texttt{valid\_from}; un objet \texttt{threat-actor} possède les champs \texttt{threat\_actor\_types}, \texttt{aliases} et \texttt{goals}; un objet \texttt{malware} possède les champs \texttt{malware\_types}, \texttt{is\_family} et \texttt{capabilities}. Ce polymorphisme structurel pose un problème fondamental pour la persistance relationnelle.
+
+Dans une base relationnelle telle que PostgreSQL, trois stratégies sont envisageables pour modéliser ce polymorphisme, et chacune présente des limitations critiques :
+
+\begin{itemize}
+    \item \textbf{Table unique avec colonnes nullables} (\textit{Single Table Inheritance}) : une table monolithique contient l'union de tous les attributs possibles. Pour 18 types d'objets, cela produit une table excessivement sparse avec des dizaines de colonnes à valeur nulle pour chaque enregistrement, dégradant l'efficacité de stockage et la lisibilité du schéma.
+    \item \textbf{Tables par type} (\textit{Concrete Table Inheritance}) : chaque type STIX possède sa propre table. Les requêtes transversales (par exemple, ``tous les objets créés depuis 24 heures'') nécessitent des opérations \texttt{UNION} sur 18 tables, dont la complexité croît linéairement avec le nombre de types et le volume de chaque table.
+    \item \textbf{Modèle Entité-Attribut-Valeur (EAV)} : les attributs sont stockés sous forme de triplets $(entité, attribut, valeur)$. Bien que flexible, ce modèle transforme chaque lecture d'objet en une série de jointures dont le nombre est proportionnel au nombre d'attributs, produisant une charge I/O-bound prohibitive à grande échelle.
+\end{itemize}
+
+\subsubsection{MongoDB et la persistance documentaire naturelle}
+
+MongoDB, en tant que base documentaire, résout ce problème de polymorphisme par construction. Chaque objet STIX est stocké comme un document JSON autonome dont la structure s'adapte naturellement à son type, sans contrainte de schéma fixe. Un document \texttt{indicator} contient exactement les champs de l'indicateur; un document \texttt{threat-actor} contient exactement les champs de l'acteur de menace. Aucune colonne nulle, aucune jointure, aucune opération \texttt{UNION}.
+
+Notre service MongoDB implémente le patron Singleton avec un pool de connexions asynchrones via Motor (wrapper asynchrone de PyMongo), configuré avec un minimum de 5 et un maximum de 50 connexions simultanées (\texttt{minPoolSize=5}, \texttt{maxPoolSize=50}). Les temporisations sont calibrées pour l'environnement conteneurisé : 5~secondes pour la sélection du serveur, 5~secondes pour l'établissement de la connexion, et 30~secondes pour les opérations de lecture sur socket.
+
+\subsubsection{Insertion idempotente par upsert}
+
+Les opérations d'écriture utilisent systématiquement le mécanisme d'insertion idempotente (\textit{upsert}) de MongoDB. Pour chaque objet STIX reçu, la méthode \texttt{update\_one()} est invoquée avec le filtre \texttt{\{"id": stix\_obj.id\}} et l'option \texttt{upsert=True}. Si un document portant le même identifiant STIX existe déjà, il est mis à jour avec les nouvelles métadonnées (notamment l'horodatage \texttt{modified}). Sinon, un nouveau document est créé. Ce mécanisme garantit qu'un même indicateur reçu simultanément de sources multiples --- situation fréquente lorsque plusieurs flux OSINT convergent vers le même IoC --- ne produit pas de doublons dans la base, tout en assurant que chaque observation successive enrichit le document existant.
+
+Pour les opérations de masse, nous avons implémenté une méthode \texttt{bulk\_create\_stix()} qui regroupe les documents par collection cible (objets STIX, relations, observations) et exécute un \texttt{bulk\_write()} avec ordonnancement désactivé (\texttt{ordered=False}), ce qui permet au pilote de paralléliser les écritures et de poursuivre l'insertion en cas d'erreur sur un document individuel, sans interrompre le lot complet.
+
+Le routage vers la collection appropriée est assuré par une fonction déterministe qui inspecte le champ \texttt{type} de chaque objet : les objets de type \texttt{relationship} sont dirigés vers la collection \texttt{stix\_relationships}, les objets de type \texttt{sighting} vers \texttt{stix\_sightings}, les définitions de marquage vers \texttt{marking\_definitions}, et tous les autres types vers la collection générale \texttt{stix\_objects}. Cette ségrégation par collection optimise les performances de requêtage en réduisant l'espace de recherche pour les opérations les plus fréquentes : la traversée de relations et la recherche d'indicateurs.

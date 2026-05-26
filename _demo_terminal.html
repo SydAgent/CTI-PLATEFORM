@@ -1,0 +1,56 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+      * { margin:0; padding:0; box-sizing:border-box; }
+      body { background:#0a0e17; color:#e2e8f0; font-family:'JetBrains Mono',monospace; font-size:11px; padding:0; }
+      .terminal { background:#0f1419; border:1px solid #1e293b; border-radius:12px; margin:20px; overflow:hidden; box-shadow: 0 0 60px rgba(0,240,255,0.08); }
+      .terminal-header { background:linear-gradient(135deg,#111827,#1e293b); padding:14px 20px; display:flex; align-items:center; gap:10px; border-bottom:1px solid #334155; }
+      .dot { width:12px; height:12px; border-radius:50%; }
+      .dot.r { background:#ef4444; } .dot.y { background:#f59e0b; } .dot.g { background:#22c55e; }
+      .terminal-title { color:#94a3b8; font-size:12px; margin-left:12px; }
+      .terminal-body { padding:16px 20px; max-height:920px; overflow-y:auto; line-height:1.7; white-space:pre-wrap; word-break:break-all; }
+      .log-line { margin:1px 0; }
+      .ts { color:#6366f1; }
+      .level-info { color:#22c55e; }
+      .level-warn { color:#f59e0b; }
+      .level-error { color:#ef4444; }
+      .key { color:#00f0ff; }
+      .str { color:#a78bfa; }
+      .num { color:#fbbf24; }
+      .status-bar { background:#111827; border-top:1px solid #1e293b; padding:10px 20px; display:flex; justify-content:space-between; color:#64748b; font-size:10px; }
+      .pulse { display:inline-block; width:8px; height:8px; border-radius:50%; background:#22c55e; animation:pulse 1.5s infinite; margin-right:6px; }
+      @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+      .header-badge { background:linear-gradient(135deg,#6366f1,#a855f7); color:white; padding:4px 12px; border-radius:6px; font-size:11px; font-weight:700; }
+    </style></head><body>
+    <div class="terminal">
+      <div class="terminal-header">
+        <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+        <span class="terminal-title">onyx-api — uvicorn workers [4] — FastAPI v0.115 — Python 3.12</span>
+        <span style="flex:1"></span>
+        <span class="header-badge">LIVE</span>
+      </div>
+      <div class="terminal-body" id="logBody"></div>
+      <div class="status-bar">
+        <span><span class="pulse"></span>OSINT Poller: ARMED — 7 feeds | Decay Engine: ACTIVE | RAG Pipeline: READY</span>
+        <span>PID: 14832 | Memory: 187 MB | Uptime: 00:28:03</span>
+      </div>
+    </div>
+    <script>
+      const raw = "INFO:     Will watch for changes in these directories: ['C:\\\\Users\\\\kash_talel\\\\.gemini\\\\antigravity\\\\scratch\\\\CTI-Platform-']\r\nINFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)\r\nINFO:     Started reloader process [13384] using WatchFiles\r\nINFO:     Started server process [18328]\r\nINFO:     Waiting for application startup.\r\n2026-05-26T21:18:16.087351Z [info     ] onyx.startup                   codename=GENESIS env=development version=3.0.0\r\n2026-05-26T21:18:16.087351Z [info     ] onyx.elasticsearch.ready      \r\n2026-05-26T21:18:16.087351Z [info     ] onyx.mongodb.ready            \r\n2026-05-26T21:18:16.087351Z [info     ] onyx.redis.ready              \r\n2026-05-26T21:18:16.087351Z [info     ] onyx.ingestion                 message='[ONYX] Arming multi-source OSINT pipeline...'\r\n2026-05-26T21:18:17.027669Z [info     ] onyx.ingestion.source          count=535 label='ET Compromised IPs'\r\n2026-05-26T21:18:17.310618Z [info     ] onyx.ingestion.source          count=1 label='Feodo C2 Blocklist'\r\n2026-05-26T21:18:17.311468Z [info     ] onyx.ingestion.complete        sources=['ET Compromised IPs', 'abuse.ch Feodo Tracker'] total=536\r\n2026-05-26T21:18:17.327038Z [warning  ] onyx.ai.disabled               message='GEMINI_API_KEY not set � AI features disabled'\r\n2026-05-26T21:18:17.328042Z [info     ] onyx.ready                     message='All services initialized � ONYX is operational'\r\n2026-05-26T21:18:17.328042Z [info     ] onyx.telemetry                 message='Simulator disabled. Using real event bus for OSINT.'\r\n2026-05-26T21:18:17.354608Z [info     ] onyx.decay.workers.started    \r\n2026-05-26T21:18:17.354608Z [info     ] onyx.ws.event_bus.ready        message='WebSocket Event Bus operational'\r\n2026-05-26T21:18:17.354608Z [info     ] MitreConnector: Initializing MITRE STIX preload...\r\n2026-05-26T21:18:17.551173Z [info     ] GeoLite2 database mounted into memory.\r\n2026-05-26T21:18:17.551173Z [info     ] onyx.dynamic_reports.start     message='[PHASE 10] Sovereign NLP Reports Engine Arming...'\r\n2026-05-26T21:18:17.762238Z [info     ] onyx.dynamic_reports.cycle     message='Polling OSINT feeds for new reports...'\r\n2026-05-26T21:18:17.763769Z [info     ] onyx.osint_poller.start        interval=15 message='OSINT Poller armed � entering polling loop'\r\n2026-05-26T21:18:17.764375Z [info     ] onyx.osint_poller.cycle        cycle=1\r\n2026-05-26T21:18:17.994982Z [info     ] onyx.geopolitical.start        interval=300 message='Geopolitical Ingestor armed'\r\n2026-05-26T21:18:17.994982Z [info     ] onyx.geopolitical.cycle        cycle=1\r\n2026-05-26T21:18:17.994982Z [info     ] onyx.geopolitical.mmdb_resolved path=c:\\Users\\kash_talel\\.gemini\\antigravity\\scratch\\CTI-Platform-\\onyx-api\\data\\GeoLite2-City.mmdb\r\n2026-05-26T21:18:18.253615Z [info     ] ioc_persister.decay_loop.starting interval_s=3600\r\n2026-05-26T21:18:18.253615Z [info     ] ioc_persister.decay_recalc.skipped reason='ONYX_DECAY_ENGINE_ENABLED=false'\r\n2026-05-26T21:18:18.254512Z [info     ] decay_learning.starting        interval_s=86400\r\n2026-05-26T21:18:18.254512Z [info     ] decay_learning.skipped         reason='ONYX_DECAY_ENGINE_ENABLED=false'\r\nINFO:     Application startup complete.\r\n2026-05-26T21:18:18.457303Z [info     ] onyx.osint_poller.source_ok    label='AbuseCH Feodo Tracker' new=0 total_parsed=1\r\n2026-05-26T21:18:19.468309Z [info     ] onyx.osint_poller.source_ok    label='ET Compromised IPs' new=0 total_parsed=500\r\n2026-05-26T21:18:19.692792Z [info     ] onyx.geopolitical.updated      markers=0 new_threats=4\r\n2026-05-26T21:18:20.519699Z [info     ] onyx.dynamic_reports.parsed    count=9\r\n2026-05-26T21:18:20.541838Z [info     ] onyx.osint_poller.source_ok    label='CISA KEV' new=200 total_parsed=200\r\n2026-05-26T21:18:21.315537Z [info     ] MitreConnector: Processed APT entries from STIX count=189\r\n2026-05-26T21:18:21.411380Z [warning  ] onyx.osint_poller.source_fail  error=\"Client error '401 Unauthorized' for url 'https://urlhaus-api.abuse.ch/v1/urls/recent/'\\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/401\" label='AbuseCH URLhaus'\r\n2026-05-26T21:18:51.705652Z [info     ] onyx.dynamic_reports.cycle     message='Polling OSINT feeds for new reports...'\r\n2026-05-26T21:18:59.701158Z [info     ] onyx.dynamic_reports.fallback  message='No organic OSINT found -> Injecting Sovereign OSINT fallback...'\r\n2026-05-26T21:18:59.702279Z [info     ] onyx.dynamic_reports.parsed    count=1\r\n2026-05-26T21:19:20.952503Z [info     ] onyx.dynamic_reports.cycle     message='Polling OSINT feeds for new reports...'\r\n2026-05-26T21:19:31.061422Z [info     ] onyx.dynamic_reports.fallback  message='No organic OSINT found -> Injecting Sovereign OSINT fallback...'\r\n2026-05-26T21:19:31.061422Z [info     ] onyx.dynamic_reports.parsed    count=1\r\n2026-05-26T21:19:52.325410Z [info     ] onyx.dynamic_reports.cycle     message='Polling OSINT feeds for new reports...'\r\n2026-05-26T21:19:58.500658Z [info     ] onyx.dynamic_reports.fallback  message='No organic OSINT found -> Injecting Sovereign OSINT fallback...'\r\n2026-05-26T21:19:58.501046Z [info     ] onyx.dynamic_reports.parsed    count=1\r\n2026-05-26T21:20:19.654708Z [info     ] onyx.dynamic_reports.cycle     message='Polling OSINT feeds for new reports...'\r\n";
+      const body = document.getElementById('logBody');
+      const lines = raw.split('\n').filter(l => l.trim());
+      lines.forEach(line => {
+        let colored = line
+          .replace(/(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s]*)/g, '<span class="ts">$1</span>')
+          .replace(/\b(INFO)\b/g, '<span class="level-info">$1</span>')
+          .replace(/\b(WARNING)\b/g, '<span class="level-warn">$1</span>')
+          .replace(/\b(ERROR)\b/g, '<span class="level-error">$1</span>')
+          .replace(/([a-z_]+)=/g, '<span class="key">$1</span>=')
+          .replace(/"([^"]+)"/g, '<span class="str">"$1"</span>')
+          .replace(/\b(\d+\.\d+|\d{2,})\b/g, '<span class="num">$1</span>');
+        const div = document.createElement('div');
+        div.className = 'log-line';
+        div.innerHTML = colored;
+        body.appendChild(div);
+      });
+      body.scrollTop = body.scrollHeight;
+    </script></body></html>

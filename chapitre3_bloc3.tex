@@ -1,0 +1,172 @@
+
+\section{Modélisation Avancée : Graphe de Menace et Dégradation Tactique}
+
+Au-delà de l'analyse individuelle des indicateurs, la valeur opérationnelle du renseignement réside dans la capacité à reconstruire les structures relationnelles qui lient les entités de menace entre elles et à quantifier l'évolution temporelle de leur pertinence. Nous avons implémenté deux mécanismes complémentaires qui répondent à ces exigences : une topologie de graphe orienté pour la modélisation multi-sauts des chaînes d'attaque, et un moteur de déclin paramétré pour la gestion algorithmique du cycle de vie des indicateurs de compromission.
+
+\subsection{Topologie Graphe (Neo4j) et Modélisation Multi-Sauts}
+
+\subsubsection{Le modèle de données : Graphe de propriétés labelé}
+
+Comme justifié au Chapitre~II (section~II.3.c), Neo4j est retenu pour modéliser les relations complexes entre entités de renseignement. Le modèle de données sous-jacent est le \textbf{graphe de propriétés labelé} (\textit{Labeled Property Graph}, LPG), une structure formellement définie comme un tuple $G = (N, R, L_N, L_R, P)$ où :
+
+\begin{itemize}
+    \item $N$ est l'ensemble des n\oe uds, chaque n\oe ud représentant une entité STIX (acteur de menace, campagne, programme malveillant, vulnérabilité, infrastructure, indicateur).
+    \item $R \subseteq N \times N$ est l'ensemble des arêtes orientées, chaque arête représentant une relation STIX (\texttt{attributed-to}, \texttt{uses}, \texttt{exploits}, \texttt{targets}, \texttt{indicates}).
+    \item $L_N : N \rightarrow 2^{\Lambda}$ est la fonction d'étiquetage qui associe à chaque n\oe ud un ensemble de labels (par exemple, \texttt{ThreatActor}, \texttt{Campaign}).
+    \item $L_R : R \rightarrow \Lambda$ est la fonction d'étiquetage des arêtes (par exemple, \texttt{ATTRIBUTED\_TO}).
+    \item $P$ est l'ensemble des propriétés clé-valeur attachées aux n\oe uds et aux arêtes (identifiant STIX, nom, score de confiance, horodatage).
+\end{itemize}
+
+Ce modèle permet de représenter nativement les 18 types d'objets STIX~2.1 comme des n\oe uds labelés et les relations STIX comme des arêtes orientées, sans la transformation structurelle (\textit{impedance mismatch}) qu'imposerait un schéma relationnel.
+
+\subsubsection{Contiguïté sans index (\textit{Index-Free Adjacency})}
+
+La propriété architecturale fondamentale qui distingue Neo4j des bases de données relationnelles pour les requêtes de traversée est la \textbf{contiguïté sans index} (\textit{index-free adjacency}). Dans une base relationnelle, la résolution d'une jointure entre deux tables nécessite une recherche par index (typiquement un arbre B+ de complexité $\mathcal{O}(\log n)$ par clé étrangère). Pour une traversée de $k$ jointures sur une table de $n$ enregistrements, la complexité totale est de $\mathcal{O}(k \cdot \log n)$ dans le cas indexé, et de $\mathcal{O}(k \cdot n)$ dans le cas non indexé --- cette complexité croissant donc avec la taille totale de la base.
+
+Dans Neo4j, chaque n\oe ud stocke physiquement des pointeurs directs vers ses n\oe uds adjacents. La traversée d'une arête est une opération de déréférencement de pointeur en $\mathcal{O}(1)$, indépendamment du nombre total de n\oe uds dans le graphe. Pour une traversée de $k$ sauts visitant en moyenne $b$ voisins par n\oe ud (\textit{branching factor}), la complexité totale est de $\mathcal{O}(b^k)$ --- elle dépend de la topologie locale du sous-graphe exploré, mais \textit{pas} de la taille globale du graphe. Cette propriété est déterminante pour une plateforme de renseignement : à mesure que la base de connaissances s'enrichit en millions d'indicateurs, le temps de traversée d'une chaîne d'attaque spécifique reste constant, car il ne dépend que de la profondeur de la chaîne et du degré moyen des n\oe uds impliqués.
+
+\subsubsection{Requêtes de corrélation multi-sauts en Cypher}
+
+Le langage de requête Cypher, natif de Neo4j, exprime les traversées de graphe sous une forme déclarative qui reflète directement la topologie recherchée. Considérons le scénario opérationnel suivant : un analyste identifie une adresse IP suspecte et souhaite reconstruire l'intégralité de la chaîne d'attaque associée --- de l'acteur responsable jusqu'aux infrastructures ciblées, en passant par les campagnes, les programmes malveillants et les vulnérabilités exploitées. Cette reconstruction, que nous désignons par le terme de \textbf{rayon d'impact} (\textit{Blast Radius}) d'un indicateur, s'exprime en une seule requête Cypher :
+
+\begin{lstlisting}[language=, caption={Requête Cypher de corrélation multi-sauts : reconstruction du rayon d'impact d'un indicateur.}, label={lst:cypher}]
+// Rayon d'impact (Blast Radius) d'un indicateur
+// Traversee : Indicateur -> Malware -> Campagne
+//          -> Acteur -> Vulnerabilite -> Infrastructure
+MATCH (ioc:Indicator {value: '185.220.101.45'})
+MATCH path = (ioc)-[:INDICATES]->(m:Malware)
+              -[:USED_BY]->(c:Campaign)
+              -[:ATTRIBUTED_TO]->(a:ThreatActor)
+OPTIONAL MATCH vuln_path = (m)-[:EXPLOITS]->(v:Vulnerability)
+OPTIONAL MATCH infra_path = (c)-[:TARGETS]->(i:Infrastructure)
+RETURN
+  a.name        AS acteur,
+  a.aliases     AS alias_connus,
+  c.name        AS campagne,
+  c.first_seen  AS debut_campagne,
+  m.name        AS malware,
+  m.malware_types AS type_malware,
+  v.name        AS vulnerabilite,
+  v.cvss_score  AS score_cvss,
+  i.name        AS infrastructure_ciblee,
+  length(path)  AS profondeur_traversee
+ORDER BY v.cvss_score DESC
+\end{lstlisting}
+
+Cette requête unique reconstruit, en une seule traversée, la chaîne complète : \textbf{Indicateur $\rightarrow$ Programme malveillant $\rightarrow$ Campagne $\rightarrow$ Acteur de menace}, avec des branches optionnelles vers les \textbf{Vulnérabilités exploitées} et les \textbf{Infrastructures ciblées}. Dans une base relationnelle classique, cette reconstruction nécessiterait quatre à cinq jointures successives (\texttt{JOIN}) entre des tables distinctes, dont le coût computationnel croîtrait avec le volume de chaque table. Grâce à la contiguïté sans index de Neo4j, cette opération s'exécute en temps proportionnel au nombre de relations traversées ($k = 4$ à $5$ sauts), indépendamment du fait que la base contienne $10^3$ ou $10^7$ n\oe uds.
+
+\subsubsection{Traversée programmatique bornée via MongoDB \$graphLookup}
+
+Pour les traversées ne nécessitant pas la pleine expressivité de Cypher --- par exemple, la découverte de tous les n\oe uds atteignables depuis un objet STIX donné dans un rayon de $k$ sauts --- nous exploitons l'opérateur d'agrégation \texttt{\$graphLookup} de MongoDB. Cet opérateur effectue une recherche récursive en profondeur dans la collection \texttt{stix\_relationships}, paramétrable jusqu'à $k-1$ niveaux de profondeur via le champ \texttt{maxDepth}. Le résultat est un document enrichi contenant l'ensemble des relations et des n\oe uds découverts, avec un champ \texttt{depth} indiquant la distance de chaque n\oe ud par rapport à la racine.
+
+Cette double stratégie --- Neo4j pour les analyses exploratoires complexes à profondeur variable, MongoDB pour les traversées programmatiques bornées et les opérations de masse --- optimise le rapport entre expressivité et performance en acheminant chaque catégorie de requête vers le moteur de stockage le plus adapté à sa nature.
+
+\subsection{Le Moteur de Déclin (\textit{Decay Engine})}
+
+Un indicateur de compromission ne conserve pas indéfiniment sa pertinence opérationnelle. La dynamique des infrastructures d'attaque impose une réalité asymétrique : une adresse IP utilisée comme serveur de commande et contrôle sur une instance éphémère d'infrastructure en nuage peut être réassignée à un hébergeur légitime en quelques heures, tandis qu'une empreinte SHA-256 d'un binaire malveillant reste pertinente pour la détection forensique pendant plusieurs années. Nous avons formalisé cette réalité par un moteur de déclin paramétré, inspiré des modèles de décroissance de la plateforme MISP (\textit{MISP Decaying Models}) et étendu avec des paramètres contextuels spécifiques à chaque type et sous-type d'artefact.
+
+\subsubsection{Modèle mathématique de décroissance exponentielle}
+
+Nous modélisons la dégradation temporelle de la pertinence d'un indicateur par une fonction de décroissance exponentielle paramétrée par la demi-vie de l'artefact. Pour un indicateur de type $\tau$ observé pour la dernière fois il y a un intervalle temporel $\Delta t$, le score de déclin $D(\Delta t, \tau)$ est défini par :
+
+\begin{equation}
+\label{eq:decay}
+D(\Delta t, \tau) = \exp\!\left( -\frac{\ln 2 \cdot \Delta t}{t_{1/2}(\tau)} \right)
+\end{equation}
+
+où $t_{1/2}(\tau)$ désigne la demi-vie spécifique au type $\tau$, c'est-à-dire l'intervalle temporel au bout duquel le score de déclin atteint exactement $0{,}5$. La constante $\ln 2 \approx 0{,}6931$ est intégrée au numérateur de l'exposant pour garantir cette propriété par construction mathématique. Nous démontrons les trois propriétés fondamentales du modèle :
+
+\begin{itemize}
+    \item \textbf{Fraîcheur maximale à l'instant d'observation} : $D(0, \tau) = \exp(0) = 1{,}0$ --- un indicateur fraîchement observé possède une pertinence maximale.
+    \item \textbf{Demi-vie exacte} : $D(t_{1/2}, \tau) = \exp(-\ln 2) = 2^{-1} = 0{,}5$ --- la pertinence est exactement réduite de moitié après une demi-vie, quelle que soit la valeur de $t_{1/2}$.
+    \item \textbf{Convergence asymptotique} : $\displaystyle\lim_{\Delta t \to \infty} D(\Delta t, \tau) = 0$ --- la pertinence tend asymptotiquement vers zéro sans jamais l'atteindre, conformément au comportement physique attendu.
+\end{itemize}
+
+L'implémentation est réduite à une fonction pure, sans état interne, appelable depuis les processus de travail asynchrones comme depuis le code synchrone :
+
+\begin{lstlisting}[language=Python, caption={Fonction de décroissance exponentielle paramétrée par la demi-vie.}, label={lst:decay-func}]
+import math
+
+# ln(2) : garantit decay(t=half_life) == 0.5 exactement
+_LN2 = 0.6931471805599453
+
+def exponential_decay(
+    delta_time: float,
+    half_life: float,
+) -> float:
+    """
+    Calcul du score de declin.
+    delta_time et half_life doivent etre exprimes
+    dans la meme unite temporelle (heures ou jours).
+    Retourne un score dans [0.0, 1.0].
+    """
+    return math.exp(-_LN2 * delta_time / half_life)
+\end{lstlisting}
+
+\subsubsection{Demi-vies paramétrées par type d'artefact}
+
+Nous avons calibré les demi-vies de notre moteur à partir de l'analyse opérationnelle des cycles de vie des indicateurs, en croisant les données publiées par les équipes de réponse à incident (CERT-FR, US-CERT) et les observations empiriques de notre propre collecte. Le Tableau~\ref{tab:decay-half-lives} présente les valeurs retenues avec leur justification technique.
+
+\begin{table}[ht]
+\centering
+\caption{Demi-vies paramétrées par type d'indicateur de compromission.}
+\label{tab:decay-half-lives}
+\begin{tabular}{|l|l|p{7.5cm}|}
+\hline
+\textbf{Type d'artefact} & \textbf{Demi-vie $t_{1/2}$} & \textbf{Justification technique} \\
+\hline
+IP — Cloud légitime (AWS, Azure, GCP) & 6 heures & Les fournisseurs d'infrastructure en nuage recyclent les adresses IP élastiques en quelques heures après libération de l'instance. \\
+\hline
+IP — Proxy résidentiel & 24 heures & Les pools résidentiels sont renouvelés quotidiennement par les opérateurs de botnets résidentiels. \\
+\hline
+IP — N\oe ud de sortie Tor & 48 heures & Les relais Tor suivent un calendrier de rotation régulier dicté par les directives du consensus. \\
+\hline
+IP — Hébergement blindé (\textit{bulletproof}) & 72 heures & L'opérateur contrôle l'infrastructure dédiée; la rotation est délibérément lente pour maintenir la stabilité du C2. \\
+\hline
+IP — Serveur dédié criminel & 96 heures & Infrastructure louée sous fausse identité; durée de vie prolongée tant que l'hébergeur ne reçoit pas de signalement. \\
+\hline
+Domaine — TLD à fort abus (.tk, .ml, .ga) & 3--4 jours & TLD gratuits fréquemment réenregistrés en masse via des services automatisés d'enregistrement. \\
+\hline
+Domaine — TLD standard (.com, .net) & 25--30 jours & Rotation modérée; le domaine peut être saisi judiciairement ou expirer selon le registraire. \\
+\hline
+URL (C2, hameçonnage) & 48 heures & Les chemins de rappel C2 et les pages de hameçonnage sont modifiés à haute fréquence pour échapper aux listes de blocage. \\
+\hline
+SHA-256 & 730 jours & Empreinte cryptographiquement liée au binaire; pertinence forensique durable. Plancher à $0{,}30$. \\
+\hline
+SHA-1 & 548 jours & Empreinte moins robuste (vulnérabilité aux collisions) mais encore exploitable en détection. \\
+\hline
+MD5 & 365 jours & Risque de collision démontré (attaque de Wang et al., 2004); poids opérationnel réduit. \\
+\hline
+Empreinte JA3/JA4 & 180 jours & Liée à l'implémentation TLS du programme malveillant; persiste jusqu'à la mise à jour majeure du code. \\
+\hline
+CVE & 180--365 jours & Décroît en probabilité d'exploitation active une fois le taux de correction supérieur à 80~\%. Plancher à $0{,}10$. \\
+\hline
+Courriel (expéditeur d'hameçonnage) & 14 jours & Les adresses d'envoi sont jetables et changent à chaque vague de campagne. \\
+\hline
+Courriel (enregistrement C2) & 90 jours & L'acteur conserve l'adresse pour le renouvellement de l'infrastructure (certificats, domaines). \\
+\hline
+\end{tabular}
+\end{table}
+
+Nous soulignons deux raffinements importants dans notre implémentation. Premièrement, les empreintes cryptographiques (SHA-256, SHA-1, MD5) possèdent un \textbf{plancher de déclin} (\textit{decay floor}) fixé à $0{,}30$ : même après plusieurs années, une empreinte de fichier malveillant ne descend jamais en dessous de ce seuil, car elle conserve sa valeur pour la détection forensique rétrospective. Deuxièmement, les demi-vies des domaines sont \textbf{modulées par le tier du registraire} via un facteur multiplicatif : un registraire blindé (\textit{bulletproof}, tier~1) double la demi-vie (facteur $2{,}0$), car l'acteur contrôle le domaine et ne le laissera pas expirer; un registraire réputé (tier~4, par exemple GoDaddy ou Namecheap) divise la demi-vie par deux (facteur $0{,}5$), car le domaine peut être suspendu ou transféré rapidement suite à un signalement d'abus.
+
+\subsubsection{Discrétisation en états opérationnels}
+
+Le score continu $D \in [0, 1]$ est informatiquement précis mais opérationnellement inadapté à la prise de décision automatisée dans les SIEM et les plateformes de réponse à incident. Nous avons donc défini une fonction de discrétisation qui projette le score continu vers quatre états opérationnels, chacun associé à une action défensive prescrite :
+
+\begin{itemize}
+    \item \textbf{VALID} ($D > 0{,}80$) : l'indicateur est considéré comme actif et pertinent. \textit{Action prescrite} : blocage immédiat dans les règles de pare-feu et de proxy, génération d'alerte prioritaire dans le SIEM.
+    \item \textbf{DEGRADING} ($0{,}50 < D \leq 0{,}80$) : l'indicateur est en cours de dégradation. \textit{Action prescrite} : maintien du blocage avec demande de validation manuelle par un analyste avant renouvellement.
+    \item \textbf{STALE} ($0{,}15 < D \leq 0{,}50$) : l'indicateur est périmé. \textit{Action prescrite} : levée du blocage actif, conservation en liste de surveillance passive. Vérification recommandée auprès d'une source externe avant tout réengagement.
+    \item \textbf{OBSOLETE} ($D \leq 0{,}15$) : l'indicateur est considéré comme obsolète. \textit{Action prescrite} : retrait complet des règles de blocage. Archivage en base historique pour analyse rétrospective uniquement.
+\end{itemize}
+
+Deux états supplémentaires, \textbf{CONTESTED} et \textbf{RETRACTED}, sont attribués manuellement par l'analyste lorsque l'attribution d'un indicateur est contestée par une source fiable ou que l'émetteur original a rétracté l'indicateur. Ces états court-circuitent le score temporel : un indicateur rétracté reçoit un score forcé de $0{,}05$ quelle que soit sa fraîcheur, empêchant ainsi tout blocage fondé sur un renseignement invalidé.
+
+Les seuils de discrétisation ($0{,}80$, $0{,}50$, $0{,}15$) ont été calibrés pour minimiser simultanément deux risques opérationnels antagonistes : le risque de \textit{sous-blocage} (un indicateur encore actif est prématurément retiré des règles défensives) et le risque de \textit{sur-blocage} (un indicateur obsolète maintenu dans les règles produit des faux positifs qui saturent la capacité d'analyse du SOC). L'automatisation de ce cycle de vie --- de l'insertion avec un score de $1{,}0$ jusqu'au retrait automatique sous le seuil de $0{,}15$ --- réduit la charge opérationnelle des analystes SOC, qui n'interviennent manuellement que dans la zone intermédiaire DEGRADING où le jugement humain reste nécessaire.
+
+\subsubsection{Recalcul périodique et boucle d'apprentissage}
+
+Le recalcul des scores de déclin est orchestré par un processus de travail asynchrone dédié, déclenché toutes les heures par l'ordonnanceur Celery Beat (Chapitre~II, section~II.2.g). Ce processus itère sur l'ensemble des indicateurs actifs, recalcule leur score $D$ en fonction du temps écoulé depuis leur dernière observation, met à jour l'état opérationnel et émet un événement de changement d'état vers le bus Redis pour notification en temps réel aux tableaux de bord.
+
+En parallèle, une boucle d'apprentissage (\textit{decay learning loop}) observe le comportement réel des indicateurs --- réapparition dans de nouvelles sources, confirmation par des observations multiples, rétractation --- et ajuste les demi-vies par acteur. Si un groupe adverse spécifique utilise systématiquement ses adresses IP pendant 12 heures avant rotation (au lieu des 36 heures par défaut), le système apprend ce profil et applique une demi-vie personnalisée de 12 heures aux futurs indicateurs attribués à cet acteur. Ce mécanisme de rétroaction transforme le moteur de déclin d'un modèle statique en un système adaptatif qui affine ses paramètres au fil de l'accumulation de données opérationnelles.
